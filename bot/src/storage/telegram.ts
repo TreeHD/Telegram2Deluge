@@ -14,9 +14,12 @@ export async function uploadToTelegram(
   const fileSize = fs.statSync(filePath).size;
   const sizeMb = (fileSize / 1024 / 1024).toFixed(0);
 
-  logger.info({ filename, sizeMb }, "Uploading to Telegram");
+  logger.info({ filename, sizeMb }, "Uploading to Telegram (local path)");
 
-  const inputFile = new InputFile(fs.createReadStream(filePath), filename);
+  // Local Bot API server: pass absolute path as string, server reads directly from disk
+  // Zero memory usage in bot process
+  const inputFile = new InputFile(filePath, filename);
+
   const opts: any = {
     caption: `${filename} (${sizeMb} MB)`,
   };

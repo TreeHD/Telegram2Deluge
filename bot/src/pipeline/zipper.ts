@@ -3,8 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { config, logger } from "../config.js";
 
-const SPLIT_SIZE_BYTES = (config.split.targetSizeMb - 50) * 1024 * 1024;
-
 export async function splitToZip(inputPath: string, targetSizeMb: number): Promise<string[]> {
   const outputDir = config.paths.processing;
   fs.mkdirSync(outputDir, { recursive: true });
@@ -21,21 +19,12 @@ export async function splitToZip(inputPath: string, targetSizeMb: number): Promi
   }
 
   const parts: string[] = [];
-  const readStream = fs.createReadStream(inputPath);
-  let partIndex = 1;
-  let bytesWritten = 0;
-  let currentOutput: string | null = null;
-  let currentArchive: archiver.Archiver | null = null;
-  let currentStream: fs.WriteStream | null = null;
-
-  const inputBuffer = fs.readFileSync(inputPath);
 
   for (let i = 0; i < partCount; i++) {
     const partNum = String(i + 1).padStart(2, "0");
     const outputPath = path.join(outputDir, `${basename}.part${partNum}.zip`);
     const start = i * splitSize;
     const end = Math.min(start + splitSize, fileSize);
-    const chunk = inputBuffer.subarray(start, end);
 
     await new Promise<void>((resolve, reject) => {
       const output = fs.createWriteStream(outputPath);
@@ -45,7 +34,10 @@ export async function splitToZip(inputPath: string, targetSizeMb: number): Promi
       archive.on("error", (err) => reject(err));
 
       archive.pipe(output);
-      archive.append(Buffer.from(chunk), {
+
+      // Stream a slice of the file without loading entire file into memory
+      const readStream = fs.createReadStream(inputPath, { start, end: end - 1 });
+      archive.append(readStream, {
         name: `${path.basename(inputPath)}.part${partNum}`,
       });
       archive.finalize();

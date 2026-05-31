@@ -27,6 +27,8 @@ services:
       - TELEGRAM_LOCAL=true
     volumes:
       - ./data/telegram-bot-api:/var/lib/telegram-bot-api
+      - ./data/downloads:/data/downloads
+      - ./data/processing:/data/processing
 
   bot:
     image: ghcr.io/treehd/telegram2deluge:latest
@@ -40,3 +42,4 @@ services:
       - ./data/downloads:/data/downloads
       - ./data/processing:/data/processing
       - ./data/queue:/data/queue
+      - ./data/telegram-bot-api:/var/lib/telegram-bot-api

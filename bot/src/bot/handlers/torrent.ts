@@ -1,6 +1,6 @@
 import { BotContext } from "../index.js";
 import { config, logger } from "../../config.js";
-import path from "node:path";
+import fs from "node:fs";
 
 export async function handleTorrentFile(ctx: BotContext) {
   const doc = ctx.message?.document;
@@ -13,10 +13,19 @@ export async function handleTorrentFile(ctx: BotContext) {
   try {
     const file = await ctx.getFile();
     const filePath = file.file_path!;
-    const response = await fetch(
-      `http://localhost:8081/file/bot${config.botToken}/${filePath}`
-    );
-    const buffer = Buffer.from(await response.arrayBuffer());
+
+    let buffer: Buffer;
+    if (filePath.startsWith("/")) {
+      // Local Bot API server returns absolute path
+      buffer = fs.readFileSync(filePath);
+    } else {
+      // Fallback: download via HTTP
+      const response = await fetch(
+        `http://localhost:8081/file/bot${config.botToken}/${filePath}`
+      );
+      buffer = Buffer.from(await response.arrayBuffer());
+    }
+
     const b64 = buffer.toString("base64");
 
     const torrentId = await ctx.deluge.addTorrentFile(
