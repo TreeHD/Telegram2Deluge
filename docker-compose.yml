@@ -1,6 +1,6 @@
 services:
   bot:
-    build: ./bot
+    image: ghcr.io/TreeHD/telegram2deluge:latest
     restart: unless-stopped
     env_file: .env
     volumes:
