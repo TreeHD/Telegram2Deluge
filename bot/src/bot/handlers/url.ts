@@ -1,5 +1,6 @@
 import { BotContext } from "../index.js";
 import { config, logger } from "../../config.js";
+import { getTrackers } from "../../qb/trackers.js";
 import fs from "node:fs";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
@@ -9,7 +10,6 @@ export async function handleUrl(ctx: BotContext) {
   const text = ctx.message!.text!.trim();
 
   try {
-    // Check if URL points to a .torrent file
     const url = new URL(text);
     const isTorrentUrl = url.pathname.endsWith(".torrent");
 
@@ -27,7 +27,6 @@ export async function handleUrl(ctx: BotContext) {
 }
 
 async function addTorrentFromUrl(ctx: BotContext, url: string) {
-  // Download .torrent file first, then add via file method (more reliable)
   const response = await fetch(url);
   if (!response.ok) {
     await ctx.reply(`下載 torrent 檔案失敗: HTTP ${response.status}`);
@@ -36,22 +35,26 @@ async function addTorrentFromUrl(ctx: BotContext, url: string) {
 
   const buffer = Buffer.from(await response.arrayBuffer());
   const filename = path.basename(new URL(url).pathname) || "download.torrent";
-  const b64 = buffer.toString("base64");
 
-  const torrentId = await ctx.deluge.addTorrentFile(filename, b64, {
-    download_location: config.paths.downloads,
+  const hash = await ctx.qb.addTorrentFile(buffer, filename, {
+    savepath: config.paths.downloads,
   });
 
-  if (!torrentId) {
-    await ctx.reply("Deluge 無法解析此 torrent 檔案。");
+  if (!hash) {
+    await ctx.reply("qBittorrent 無法解析此 torrent 檔案。");
     return;
   }
 
-  ctx.monitor.track(torrentId, ctx.chat!.id);
-  await ctx.reply(`已加入下載佇列\nTorrent ID: \`${torrentId}\``, {
+  const trackers = getTrackers();
+  if (trackers.length > 0) {
+    await ctx.qb.addTrackers(hash, trackers);
+  }
+
+  ctx.monitor.track(hash, ctx.chat!.id);
+  await ctx.reply(`已加入下載佇列\nHash: \`${hash}\``, {
     parse_mode: "Markdown",
   });
-  logger.info({ torrentId, url }, "Torrent URL added");
+  logger.info({ hash, url }, "Torrent URL added");
 }
 
 async function downloadDirectUrl(ctx: BotContext, url: string) {
@@ -82,7 +85,6 @@ async function downloadDirectUrl(ctx: BotContext, url: string) {
   await ctx.reply(`下載完成: ${filename} (${sizeMb} MB)`);
   logger.info({ filename, sizeMb, url }, "Direct URL download complete");
 
-  // Enqueue to pipeline for upload
   ctx.pipeline.enqueue({
     torrentId: `direct-${Date.now()}`,
     chatId: ctx.chat!.id,

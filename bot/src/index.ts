@@ -1,18 +1,19 @@
 import { config, logger } from "./config.js";
 import { createBot, Services } from "./bot/index.js";
-import { DelugeClient } from "./deluge/client.js";
+import { QBClient } from "./qb/client.js";
+import { startTrackerUpdater } from "./qb/trackers.js";
 import { DownloadMonitor } from "./monitor/index.js";
 import { Pipeline } from "./pipeline/index.js";
 import fs from "node:fs";
 
-async function connectWithRetry(deluge: DelugeClient, maxRetries = 30, interval = 3000) {
+async function connectWithRetry(qb: QBClient, maxRetries = 30, interval = 3000) {
   for (let i = 1; i <= maxRetries; i++) {
     try {
-      await deluge.connect();
+      await qb.connect();
       return;
     } catch (err) {
       if (i === maxRetries) throw err;
-      logger.warn(`Deluge connection failed (attempt ${i}/${maxRetries}), retrying in ${interval / 1000}s...`);
+      logger.warn(`qBittorrent connection failed (attempt ${i}/${maxRetries}), retrying in ${interval / 1000}s...`);
       await new Promise((r) => setTimeout(r, interval));
     }
   }
@@ -23,12 +24,14 @@ async function main() {
     fs.mkdirSync(dir, { recursive: true });
   }
 
-  const deluge = new DelugeClient(config.deluge);
-  await connectWithRetry(deluge);
-  logger.info("Connected to Deluge daemon");
+  const qb = new QBClient(config.qb);
+  await connectWithRetry(qb);
+  logger.info("Connected to qBittorrent");
 
-  const monitor = new DownloadMonitor(deluge);
-  const services: Services = { deluge, monitor };
+  startTrackerUpdater();
+
+  const monitor = new DownloadMonitor(qb);
+  const services: Services = { qb, monitor };
   const bot = createBot(services);
   const pipeline = new Pipeline(bot.api);
   services.pipeline = pipeline;

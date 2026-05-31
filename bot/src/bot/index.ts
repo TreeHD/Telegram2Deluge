@@ -1,6 +1,6 @@
-import { Bot, Context } from "grammy";
+import { Bot, Context, InlineKeyboard } from "grammy";
 import { config, logger } from "../config.js";
-import { DelugeClient } from "../deluge/client.js";
+import { QBClient } from "../qb/client.js";
 import { DownloadMonitor } from "../monitor/index.js";
 import { Pipeline } from "../pipeline/index.js";
 import { handleTorrentFile } from "./handlers/torrent.js";
@@ -10,13 +10,13 @@ import { handleStatus } from "./handlers/status.js";
 import { handleDisk } from "./handlers/disk.js";
 
 export interface BotContext extends Context {
-  deluge: DelugeClient;
+  qb: QBClient;
   monitor: DownloadMonitor;
   pipeline: Pipeline;
 }
 
 export interface Services {
-  deluge: DelugeClient;
+  qb: QBClient;
   monitor: DownloadMonitor;
   pipeline?: Pipeline;
 }
@@ -29,7 +29,7 @@ export function createBot(services: Services) {
   });
 
   bot.use((ctx, next) => {
-    ctx.deluge = services.deluge;
+    ctx.qb = services.qb;
     ctx.monitor = services.monitor;
     ctx.pipeline = services.pipeline!;
     return next();
@@ -84,10 +84,7 @@ export function createBot(services: Services) {
       const jobId = data.slice(6);
       await ctx.answerCallbackQuery({ text: "已跳過 R2 上傳" });
       await ctx.editMessageText("已完成，未上傳到 R2。");
-      const pending = ctx.pipeline.getPendingR2(jobId);
-      if (pending) {
-        ctx.pipeline.removePendingR2(jobId);
-      }
+      ctx.pipeline.removePendingR2(jobId);
     }
   });
 
