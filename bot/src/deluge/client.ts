@@ -1,25 +1,47 @@
 import tls from "node:tls";
-import { EventEmitter } from "node:events";
-import { rencodeEncode, rencodeDecode, compressFrame, decompressFrame } from "./protocol.js";
+import zlib from "node:zlib";
+import { rencodeEncode, rencodeDecode } from "./protocol.js";
 import { DelugeConfig, TorrentOptions, TorrentStatus } from "./types.js";
 import { logger } from "../config.js";
 
 const PROTOCOL_VERSION = 1;
+const HEADER_SIZE = 5;
 
-export class DelugeClient extends EventEmitter {
+export class DelugeClient {
   private config: DelugeConfig;
   private socket: tls.TLSSocket | null = null;
   private requestId = 0;
   private pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void }>();
   private buffer = Buffer.alloc(0);
+  private useHeader = true;
 
   constructor(config: DelugeConfig) {
-    super();
     this.config = config;
   }
 
   async connect(): Promise<void> {
+    // Try with header first (Deluge 2.x), fall back to without (Deluge 1.x)
+    try {
+      this.useHeader = true;
+      await this.tryConnect();
+    } catch (err) {
+      logger.info("Header-based protocol failed, trying without header...");
+      this.socket?.destroy();
+      this.socket = null;
+      this.buffer = Buffer.alloc(0);
+      this.requestId = 0;
+      this.pending.clear();
+      this.useHeader = false;
+      await this.tryConnect();
+    }
+  }
+
+  private async tryConnect(): Promise<void> {
     return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error("Connection timeout"));
+      }, 15000);
+
       this.socket = tls.connect(
         {
           host: this.config.host,
@@ -28,9 +50,13 @@ export class DelugeClient extends EventEmitter {
         },
         async () => {
           try {
+            logger.info({ useHeader: this.useHeader }, "TLS connected, attempting login...");
             await this.call("daemon.login", [this.config.username, this.config.password]);
+            clearTimeout(timeout);
+            logger.info("Deluge daemon login successful");
             resolve();
           } catch (err) {
+            clearTimeout(timeout);
             reject(err);
           }
         }
@@ -38,13 +64,11 @@ export class DelugeClient extends EventEmitter {
 
       this.socket.on("data", (data) => this.onData(data));
       this.socket.on("error", (err) => {
-        logger.error(err, "Deluge socket error");
-        this.emit("error", err);
+        clearTimeout(timeout);
         reject(err);
       });
       this.socket.on("close", () => {
         logger.warn("Deluge connection closed");
-        this.emit("close");
       });
     });
   }
@@ -57,41 +81,81 @@ export class DelugeClient extends EventEmitter {
   }
 
   private onData(chunk: Buffer) {
+    logger.debug({ bytes: chunk.length, hex: chunk.subarray(0, 20).toString("hex") }, "Received data from Deluge");
     this.buffer = Buffer.concat([this.buffer, chunk]);
     this.processBuffer();
   }
 
   private processBuffer() {
-    while (this.buffer.length > 0) {
-      try {
-        const decompressed = decompressFrame(this.buffer);
-        const message = rencodeDecode(decompressed);
-        this.buffer = Buffer.alloc(0);
-        this.handleMessage(message);
-      } catch {
-        // incomplete data, wait for more
+    if (this.useHeader) {
+      this.processBufferWithHeader();
+    } else {
+      this.processBufferRaw();
+    }
+  }
+
+  private processBufferWithHeader() {
+    while (this.buffer.length >= HEADER_SIZE) {
+      const version = this.buffer[0];
+      const payloadLength = this.buffer.readUInt32BE(1);
+
+      if (this.buffer.length < HEADER_SIZE + payloadLength) {
         break;
+      }
+
+      const payload = this.buffer.subarray(HEADER_SIZE, HEADER_SIZE + payloadLength);
+      this.buffer = this.buffer.subarray(HEADER_SIZE + payloadLength);
+
+      try {
+        const decompressed = zlib.inflateSync(payload);
+        const message = rencodeDecode(decompressed);
+        this.handleMessage(message);
+      } catch (err) {
+        logger.error(err, "Failed to decode Deluge response (header mode)");
       }
     }
   }
 
+  private processBufferRaw() {
+    // Without header: try to decompress the entire buffer as one zlib stream
+    if (this.buffer.length === 0) return;
+
+    try {
+      const decompressed = zlib.inflateSync(this.buffer);
+      this.buffer = Buffer.alloc(0);
+      const message = rencodeDecode(decompressed);
+      this.handleMessage(message);
+    } catch {
+      // Incomplete data, wait for more
+    }
+  }
+
   private handleMessage(message: any) {
-    if (!Array.isArray(message)) return;
+    if (!Array.isArray(message)) {
+      logger.debug({ message }, "Non-array message received");
+      return;
+    }
 
-    const [msgType, requestId, data] = message;
+    // Response format: [[msgType, requestId, data], ...]
+    // or single: [msgType, requestId, data]
+    const messages = Array.isArray(message[0]) ? message : [message];
 
-    if (msgType === 1) {
-      const pending = this.pending.get(requestId);
-      if (pending) {
-        pending.resolve(data);
-        this.pending.delete(requestId);
-      }
-    } else if (msgType === 2) {
-      const pending = this.pending.get(requestId);
-      if (pending) {
-        const errMsg = Array.isArray(data) ? data.join("\n") : String(data);
-        pending.reject(new Error(`Deluge RPC error: ${errMsg}`));
-        this.pending.delete(requestId);
+    for (const msg of messages) {
+      const [msgType, requestId, data] = msg;
+
+      if (msgType === 1) {
+        const pending = this.pending.get(requestId);
+        if (pending) {
+          pending.resolve(data);
+          this.pending.delete(requestId);
+        }
+      } else if (msgType === 2) {
+        const pending = this.pending.get(requestId);
+        if (pending) {
+          const errMsg = Array.isArray(data) ? data.join("\n") : String(data);
+          pending.reject(new Error(`Deluge RPC error: ${errMsg}`));
+          this.pending.delete(requestId);
+        }
       }
     }
   }
@@ -104,18 +168,30 @@ export class DelugeClient extends EventEmitter {
     const id = this.requestId++;
     const request = [[id, method, args, kwargs]];
     const encoded = rencodeEncode(request);
-    const compressed = compressFrame(encoded);
+    const compressed = zlib.deflateSync(encoded);
+
+    let frame: Buffer;
+    if (this.useHeader) {
+      const header = Buffer.alloc(HEADER_SIZE);
+      header[0] = PROTOCOL_VERSION;
+      header.writeUInt32BE(compressed.length, 1);
+      frame = Buffer.concat([header, compressed]);
+    } else {
+      frame = compressed;
+    }
+
+    logger.debug({ method, id, frameSize: frame.length, useHeader: this.useHeader }, "Sending RPC call");
 
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
-      this.socket!.write(compressed);
+      this.socket!.write(frame);
 
       setTimeout(() => {
         if (this.pending.has(id)) {
           this.pending.delete(id);
           reject(new Error(`RPC timeout: ${method}`));
         }
-      }, 30000);
+      }, 15000);
     });
   }
 
