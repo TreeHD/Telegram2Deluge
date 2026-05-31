@@ -14,7 +14,7 @@ export async function handleTorrentFile(ctx: BotContext) {
     const file = await ctx.getFile();
     const filePath = file.file_path!;
     const response = await fetch(
-      `http://telegram-bot-api:8081/file/bot${config.botToken}/${filePath}`
+      `http://localhost:8081/file/bot${config.botToken}/${filePath}`
     );
     const buffer = Buffer.from(await response.arrayBuffer());
     const b64 = buffer.toString("base64");

@@ -23,8 +23,9 @@ export const config = {
     .map((id) => parseInt(id.trim(), 10)),
 
   deluge: {
-    host: optional("DELUGE_HOST", "deluge"),
+    host: optional("DELUGE_HOST", "localhost"),
     port: parseInt(optional("DELUGE_PORT", "58846"), 10),
+    webPort: parseInt(optional("DELUGE_WEB_PORT", "8112"), 10),
     username: optional("DELUGE_USERNAME", "localclient"),
     password: required("DELUGE_PASSWORD"),
   },

@@ -1,6 +1,7 @@
 export interface DelugeConfig {
   host: string;
   port: number;
+  webPort: number;
   username: string;
   password: string;
 }

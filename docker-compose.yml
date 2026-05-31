@@ -1,18 +1,4 @@
 services:
-  bot:
-    image: ghcr.io/TreeHD/telegram2deluge:latest
-    restart: unless-stopped
-    env_file: .env
-    volumes:
-      - ./data/downloads:/data/downloads
-      - ./data/processing:/data/processing
-      - ./data/queue:/data/queue
-    depends_on:
-      - deluge
-      - telegram-bot-api
-    networks:
-      - tg-net
-
   deluge:
     image: linuxserver/deluge:latest
     restart: unless-stopped
@@ -26,26 +12,31 @@ services:
       - ./data/downloads:/data/downloads
     ports:
       - "8112:8112"
-      - "58846:58846"
       - "6881-6891:6881-6891"
       - "6881-6891:6881-6891/udp"
-    networks:
-      - tg-net
 
   telegram-bot-api:
     image: aiogram/telegram-bot-api:latest
     restart: unless-stopped
+    network_mode: "service:deluge"
+    depends_on:
+      - deluge
     environment:
       - TELEGRAM_API_ID=${TELEGRAM_API_ID}
       - TELEGRAM_API_HASH=${TELEGRAM_API_HASH}
       - TELEGRAM_LOCAL=true
     volumes:
       - ./data/telegram-bot-api:/var/lib/telegram-bot-api
-    ports:
-      - "8081:8081"
-    networks:
-      - tg-net
 
-networks:
-  tg-net:
-    driver: bridge
+  bot:
+    image: ghcr.io/treehd/telegram2deluge:latest
+    restart: unless-stopped
+    network_mode: "service:deluge"
+    depends_on:
+      - deluge
+      - telegram-bot-api
+    env_file: .env
+    volumes:
+      - ./data/downloads:/data/downloads
+      - ./data/processing:/data/processing
+      - ./data/queue:/data/queue
