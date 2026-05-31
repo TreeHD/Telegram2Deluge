@@ -13,19 +13,19 @@ export async function handleTorrentFile(ctx: BotContext) {
   try {
     const file = await ctx.getFile();
     const filePath = file.file_path!;
+    logger.info({ filePath, fileId: doc.file_id }, "Got torrent file path");
 
     let buffer: Buffer;
     if (filePath.startsWith("/")) {
-      // Local Bot API server returns absolute path
       buffer = fs.readFileSync(filePath);
     } else {
-      // Fallback: download via HTTP
       const response = await fetch(
         `http://localhost:8081/file/bot${config.botToken}/${filePath}`
       );
       buffer = Buffer.from(await response.arrayBuffer());
     }
 
+    logger.info({ size: buffer.length, filename: doc.file_name }, "Torrent file downloaded, adding to Deluge");
     const b64 = buffer.toString("base64");
 
     const torrentId = await ctx.deluge.addTorrentFile(
@@ -34,6 +34,13 @@ export async function handleTorrentFile(ctx: BotContext) {
       { download_location: config.paths.downloads }
     );
 
+    logger.info({ torrentId }, "addTorrentFile response");
+
+    if (!torrentId) {
+      await ctx.reply("Deluge 無法解析此種子檔案。");
+      return;
+    }
+
     ctx.monitor.track(torrentId, ctx.chat!.id);
     await ctx.reply(`已加入下載佇列\nTorrent ID: \`${torrentId}\``, {
       parse_mode: "Markdown",
@@ -41,6 +48,6 @@ export async function handleTorrentFile(ctx: BotContext) {
     logger.info({ torrentId, filename: doc.file_name }, "Torrent added");
   } catch (err) {
     logger.error(err, "Failed to add torrent file");
-    await ctx.reply("加入種子失敗，請檢查檔案是否正確。");
+    await ctx.reply(`加入種子失敗: ${err}`);
   }
 }

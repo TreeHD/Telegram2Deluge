@@ -1,30 +1,94 @@
 import { BotContext } from "../index.js";
 import { config, logger } from "../../config.js";
+import fs from "node:fs";
+import path from "node:path";
+import { pipeline } from "node:stream/promises";
+import { Readable } from "node:stream";
 
 export async function handleUrl(ctx: BotContext) {
   const text = ctx.message!.text!.trim();
 
-  await ctx.reply("收到下載連結，正在加入下載...");
-
   try {
-    logger.info({ url: text }, "Adding URL torrent");
-    const torrentId = await ctx.deluge.addTorrentUrl(text, {
-      download_location: config.paths.downloads,
-    });
+    // Check if URL points to a .torrent file
+    const url = new URL(text);
+    const isTorrentUrl = url.pathname.endsWith(".torrent");
 
-    logger.info({ torrentId, url: text }, "addTorrentUrl response");
-
-    if (!torrentId) {
-      await ctx.reply("加入失敗：Deluge 無法解析此連結。可能不是有效的 torrent URL。");
-      return;
+    if (isTorrentUrl) {
+      await ctx.reply("收到 torrent 連結，正在加入下載...");
+      await addTorrentFromUrl(ctx, text);
+    } else {
+      await ctx.reply("收到檔案連結，正在直接下載...");
+      await downloadDirectUrl(ctx, text);
     }
-
-    ctx.monitor.track(torrentId, ctx.chat!.id);
-    await ctx.reply(`已加入下載佇列\nTorrent ID: \`${torrentId}\``, {
-      parse_mode: "Markdown",
-    });
   } catch (err) {
-    logger.error(err, "Failed to add URL torrent");
-    await ctx.reply(`加入下載連結失敗: ${err}`);
+    logger.error(err, "Failed to handle URL");
+    await ctx.reply(`處理連結失敗: ${err}`);
   }
+}
+
+async function addTorrentFromUrl(ctx: BotContext, url: string) {
+  // Download .torrent file first, then add via file method (more reliable)
+  const response = await fetch(url);
+  if (!response.ok) {
+    await ctx.reply(`下載 torrent 檔案失敗: HTTP ${response.status}`);
+    return;
+  }
+
+  const buffer = Buffer.from(await response.arrayBuffer());
+  const filename = path.basename(new URL(url).pathname) || "download.torrent";
+  const b64 = buffer.toString("base64");
+
+  const torrentId = await ctx.deluge.addTorrentFile(filename, b64, {
+    download_location: config.paths.downloads,
+  });
+
+  if (!torrentId) {
+    await ctx.reply("Deluge 無法解析此 torrent 檔案。");
+    return;
+  }
+
+  ctx.monitor.track(torrentId, ctx.chat!.id);
+  await ctx.reply(`已加入下載佇列\nTorrent ID: \`${torrentId}\``, {
+    parse_mode: "Markdown",
+  });
+  logger.info({ torrentId, url }, "Torrent URL added");
+}
+
+async function downloadDirectUrl(ctx: BotContext, url: string) {
+  const response = await fetch(url);
+  if (!response.ok) {
+    await ctx.reply(`下載失敗: HTTP ${response.status}`);
+    return;
+  }
+
+  const contentDisposition = response.headers.get("content-disposition");
+  let filename = path.basename(new URL(url).pathname) || "download";
+  if (contentDisposition) {
+    const match = contentDisposition.match(/filename[*]?=(?:UTF-8''|"?)([^";]+)/i);
+    if (match) filename = decodeURIComponent(match[1].replace(/"/g, ""));
+  }
+
+  const destPath = path.join(config.paths.downloads, filename);
+  const fileStream = fs.createWriteStream(destPath);
+
+  await pipeline(
+    Readable.fromWeb(response.body! as any),
+    fileStream
+  );
+
+  const fileSize = fs.statSync(destPath).size;
+  const sizeMb = (fileSize / 1024 / 1024).toFixed(1);
+
+  await ctx.reply(`下載完成: ${filename} (${sizeMb} MB)`);
+  logger.info({ filename, sizeMb, url }, "Direct URL download complete");
+
+  // Enqueue to pipeline for upload
+  ctx.pipeline.enqueue({
+    torrentId: `direct-${Date.now()}`,
+    chatId: ctx.chat!.id,
+    name: filename,
+    savePath: config.paths.downloads,
+    files: [{ path: destPath, size: fileSize }],
+    totalSize: fileSize,
+  });
 }
