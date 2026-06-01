@@ -7,6 +7,7 @@ import { uploadToTelegram } from "../storage/telegram.js";
 import { getFilesInDir, isVideoFile } from "./utils.js";
 import { QBClient } from "../qb/client.js";
 import { withRetry } from "../utils/retry.js";
+import { escapeHtml, escapeHref } from "../utils/html.js";
 import {
   addPipelineJob,
   updateJobStatus,
@@ -138,7 +139,7 @@ export class Pipeline {
       const r2Key = `${jobId}/${filename}`;
       await uploadToR2(file, r2Key);
       const url = await getPresignedUrl(r2Key);
-      urls.push(`[${filename}](${url})`);
+      urls.push(`<a href="${escapeHref(url)}">${escapeHtml(filename)}</a>`);
     }
 
     this.cleanupProcessing(files);

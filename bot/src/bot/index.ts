@@ -8,6 +8,7 @@ import { handleMagnet } from "./handlers/magnet.js";
 import { handleUrl } from "./handlers/url.js";
 import { handleStatus } from "./handlers/status.js";
 import { handleDisk } from "./handlers/disk.js";
+import { escapeHtml } from "../utils/html.js";
 
 export interface BotContext extends Context {
   qb: QBClient;
@@ -71,7 +72,8 @@ export function createBot(services: Services) {
         if (urls.length > 0) {
           const urlList = urls.join("\n");
           await ctx.editMessageText(`R2 下載連結 (24hr):\n${urlList}`, {
-            parse_mode: "Markdown",
+            parse_mode: "HTML",
+            link_preview_options: { is_disabled: true },
           });
         } else {
           await ctx.editMessageText("找不到待上傳的檔案。");
@@ -104,7 +106,7 @@ export function createBot(services: Services) {
         const currentText = ctx.callbackQuery.message?.text || "";
         const name = currentText.split("\n")[0];
         await ctx.answerCallbackQuery({ text: "已取消下載" });
-        await ctx.editMessageText(`~${name}~\n\n已取消`, { parse_mode: "Markdown" });
+        await ctx.editMessageText(`<s>${escapeHtml(name)}</s>\n\n已取消`, { parse_mode: "HTML" });
       } else {
         await ctx.answerCallbackQuery({ text: "找不到此下載任務" });
       }

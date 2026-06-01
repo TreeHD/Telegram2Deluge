@@ -37,9 +37,14 @@ export async function uploadToR2(filePath: string, key: string): Promise<void> {
   logger.info({ key, size: fileSize }, "Uploaded to R2");
 }
 
+// Percent-encode each path segment, keeping "/" as the separator.
+function encodeKey(key: string): string {
+  return key.split("/").map(encodeURIComponent).join("/");
+}
+
 export async function getPresignedUrl(key: string): Promise<string> {
   if (config.r2.publicUrl) {
-    return `${config.r2.publicUrl}/${key}`;
+    return `${config.r2.publicUrl}/${encodeKey(key)}`;
   }
 
   const command = new GetObjectCommand({
