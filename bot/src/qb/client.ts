@@ -195,11 +195,29 @@ export class QBClient {
   }
 
   async pauseTorrent(hash: string): Promise<void> {
-    await this.request(`/torrents/pause`, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: `hashes=${hash}`,
-    });
+    // qBittorrent 5.0+ renamed /torrents/pause -> /torrents/stop.
+    // Try the new endpoint first, fall back to the old one on 404.
+    await this.postWithFallback(["/torrents/stop", "/torrents/pause"], `hashes=${hash}`);
+  }
+
+  async resumeTorrent(hash: string): Promise<void> {
+    await this.postWithFallback(["/torrents/start", "/torrents/resume"], `hashes=${hash}`);
+  }
+
+  private async postWithFallback(paths: string[], body: string): Promise<void> {
+    for (let i = 0; i < paths.length; i++) {
+      const res = await this.request(paths[i], {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body,
+      });
+
+      // 404/405 means this version doesn't have the endpoint; try the next one.
+      if (res.status === 404 || res.status === 405) {
+        if (i < paths.length - 1) continue;
+      }
+      return;
+    }
   }
 
   async getTransferInfo(): Promise<{ dl_info_speed: number; up_info_speed: number; free_space_on_disk: number }> {
