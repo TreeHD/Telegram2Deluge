@@ -6,6 +6,7 @@ import { uploadToR2, getPresignedUrl } from "../storage/r2.js";
 import { uploadToTelegram } from "../storage/telegram.js";
 import { getFilesInDir, isVideoFile } from "./utils.js";
 import { QBClient } from "../qb/client.js";
+import { withRetry } from "../utils/retry.js";
 import {
   addPipelineJob,
   updateJobStatus,
@@ -115,18 +116,14 @@ export class Pipeline {
     }
   }
 
-  private async editStatus(chatId: number, messageId: number, text: string) {
-    try {
-      await this.api.editMessageText(chatId, messageId, text);
-    } catch (err: any) {
-      if (err?.error_code === 429) {
-        const retryAfter = err?.parameters?.retry_after || 5;
-        await new Promise((r) => setTimeout(r, retryAfter * 1000));
-        try { await this.api.editMessageText(chatId, messageId, text); } catch {}
-      } else if (!err?.description?.includes("message is not modified")) {
+  private async editStatus(chatId: number, messageId: number, text: string, opts?: any) {
+    await withRetry(async () => {
+      await this.api.editMessageText(chatId, messageId, text, opts);
+    }, "editStatus").catch((err: any) => {
+      if (!err?.description?.includes("message is not modified")) {
         logger.error(err, "Failed to edit status message");
       }
-    }
+    });
   }
 
   async uploadToR2ForJob(jobId: string, chatId: number, messageId: number): Promise<string[]> {

@@ -2,6 +2,7 @@ import { Api, InlineKeyboard } from "grammy";
 import { QBClient } from "../qb/client.js";
 import { Pipeline } from "../pipeline/index.js";
 import { config, logger } from "../config.js";
+import { withRetry } from "../utils/retry.js";
 import {
   addTrackedTorrent,
   updateTrackedProgress,
@@ -148,26 +149,15 @@ export class DownloadMonitor {
   }
 
   private async editMessage(chatId: number, messageId: number, text: string, keyboard?: InlineKeyboard) {
-    try {
+    await withRetry(async () => {
       const opts: any = {};
       if (keyboard) opts.reply_markup = keyboard;
       await this.api!.editMessageText(chatId, messageId, text, opts);
-    } catch (err: any) {
-      if (err?.error_code === 429) {
-        const retryAfter = err?.parameters?.retry_after || 5;
-        logger.warn({ retryAfter }, "Telegram rate limited, backing off");
-        await new Promise((r) => setTimeout(r, retryAfter * 1000));
-        try {
-          const opts: any = {};
-          if (keyboard) opts.reply_markup = keyboard;
-          await this.api!.editMessageText(chatId, messageId, text, opts);
-        } catch {}
-      } else if (err?.description?.includes("message is not modified")) {
-        // Ignore
-      } else {
+    }, "monitor:editMessage").catch((err: any) => {
+      if (!err?.description?.includes("message is not modified")) {
         logger.error(err, "Failed to edit message");
       }
-    }
+    });
   }
 }
 

@@ -3,6 +3,7 @@ import { logger } from "../config.js";
 import fs from "node:fs";
 import path from "node:path";
 import { isVideoFile } from "../pipeline/utils.js";
+import { withRetry } from "../utils/retry.js";
 
 export async function uploadToTelegram(
   api: Api,
@@ -16,8 +17,6 @@ export async function uploadToTelegram(
 
   logger.info({ filename, sizeMb }, "Uploading to Telegram (local path)");
 
-  // Local Bot API server: pass absolute path as string, server reads directly from disk
-  // Zero memory usage in bot process
   const inputFile = new InputFile(filePath, filename);
 
   const opts: any = {
@@ -28,12 +27,14 @@ export async function uploadToTelegram(
     opts.reply_to_message_id = replyToMessageId;
   }
 
-  if (isVideoFile(filePath)) {
-    opts.supports_streaming = true;
-    await api.sendVideo(chatId, inputFile, opts);
-  } else {
-    await api.sendDocument(chatId, inputFile, opts);
-  }
+  await withRetry(async () => {
+    if (isVideoFile(filePath)) {
+      opts.supports_streaming = true;
+      await api.sendVideo(chatId, inputFile, opts);
+    } else {
+      await api.sendDocument(chatId, inputFile, opts);
+    }
+  }, `uploadToTelegram:${filename}`);
 
   logger.info({ filename }, "Uploaded to Telegram");
 }
