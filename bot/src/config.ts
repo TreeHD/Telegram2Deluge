@@ -38,13 +38,22 @@ export const config = {
   },
 
   paths: {
-    downloads: optional("DOWNLOAD_DIR", "/data/downloads"),
-    processing: optional("PROCESSING_DIR", "/data/processing"),
+    downloads: optional("DOWNLOAD_DIR", "/downloads"),
+    processing: optional("PROCESSING_DIR", "/processing"),
     queue: optional("QUEUE_DIR", "/data/queue"),
+  },
+
+  cleanup: {
+    maxAgeHours: parseInt(optional("CLEANUP_MAX_AGE_HOURS", "24"), 10),
+    intervalMinutes: parseInt(optional("CLEANUP_INTERVAL_MINUTES", "5"), 10),
   },
 
   split: {
     targetSizeMb: parseInt(optional("SPLIT_TARGET_SIZE_MB", "1950"), 10),
+  },
+
+  ffmpeg: {
+    preset: optional("FFMPEG_PRESET", "medium"),
   },
 } as const;
 

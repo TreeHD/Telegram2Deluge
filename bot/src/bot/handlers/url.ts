@@ -14,10 +14,8 @@ export async function handleUrl(ctx: BotContext) {
     const isTorrentUrl = url.pathname.endsWith(".torrent");
 
     if (isTorrentUrl) {
-      await ctx.reply("收到 torrent 連結，正在加入下載...");
       await addTorrentFromUrl(ctx, text);
     } else {
-      await ctx.reply("收到檔案連結，正在直接下載...");
       await downloadDirectUrl(ctx, text);
     }
   } catch (err) {
@@ -27,21 +25,21 @@ export async function handleUrl(ctx: BotContext) {
 }
 
 async function addTorrentFromUrl(ctx: BotContext, url: string) {
+  const msg = await ctx.reply("收到 torrent 連結，正在加入下載...");
+
   const response = await fetch(url);
   if (!response.ok) {
-    await ctx.reply(`下載 torrent 檔案失敗: HTTP ${response.status}`);
+    await ctx.api.editMessageText(msg.chat.id, msg.message_id, `下載 torrent 檔案失敗: HTTP ${response.status}`);
     return;
   }
 
   const buffer = Buffer.from(await response.arrayBuffer());
   const filename = path.basename(new URL(url).pathname) || "download.torrent";
 
-  const hash = await ctx.qb.addTorrentFile(buffer, filename, {
-    savepath: config.paths.downloads,
-  });
+  const hash = await ctx.qb.addTorrentFile(buffer, filename, {});
 
   if (!hash) {
-    await ctx.reply("qBittorrent 無法解析此 torrent 檔案。");
+    await ctx.api.editMessageText(msg.chat.id, msg.message_id, "qBittorrent 無法解析此 torrent 檔案。");
     return;
   }
 
@@ -50,17 +48,23 @@ async function addTorrentFromUrl(ctx: BotContext, url: string) {
     await ctx.qb.addTrackers(hash, trackers);
   }
 
-  ctx.monitor.track(hash, ctx.chat!.id);
-  await ctx.reply(`已加入下載佇列\nHash: \`${hash}\``, {
-    parse_mode: "Markdown",
-  });
+  await ctx.api.editMessageText(
+    msg.chat.id,
+    msg.message_id,
+    `已加入下載佇列\nHash: \`${hash}\`\n進度: 0%`,
+    { parse_mode: "Markdown" }
+  );
+
+  ctx.monitor.track(hash, msg.chat.id, msg.message_id);
   logger.info({ hash, url }, "Torrent URL added");
 }
 
 async function downloadDirectUrl(ctx: BotContext, url: string) {
+  const msg = await ctx.reply("收到檔案連結，正在直接下載...");
+
   const response = await fetch(url);
   if (!response.ok) {
-    await ctx.reply(`下載失敗: HTTP ${response.status}`);
+    await ctx.api.editMessageText(msg.chat.id, msg.message_id, `下載失敗: HTTP ${response.status}`);
     return;
   }
 
@@ -70,6 +74,9 @@ async function downloadDirectUrl(ctx: BotContext, url: string) {
     const match = contentDisposition.match(/filename[*]?=(?:UTF-8''|"?)([^";]+)/i);
     if (match) filename = decodeURIComponent(match[1].replace(/"/g, ""));
   }
+
+  const contentLength = response.headers.get("content-length");
+  const totalSize = contentLength ? parseInt(contentLength, 10) : 0;
 
   const destPath = path.join(config.paths.downloads, filename);
   const fileStream = fs.createWriteStream(destPath);
@@ -82,12 +89,13 @@ async function downloadDirectUrl(ctx: BotContext, url: string) {
   const fileSize = fs.statSync(destPath).size;
   const sizeMb = (fileSize / 1024 / 1024).toFixed(1);
 
-  await ctx.reply(`下載完成: ${filename} (${sizeMb} MB)`);
+  await ctx.api.editMessageText(msg.chat.id, msg.message_id, `下載完成: ${filename} (${sizeMb} MB)`);
   logger.info({ filename, sizeMb, url }, "Direct URL download complete");
 
   ctx.pipeline.enqueue({
     torrentId: `direct-${Date.now()}`,
-    chatId: ctx.chat!.id,
+    chatId: msg.chat.id,
+    messageId: msg.message_id,
     name: filename,
     savePath: config.paths.downloads,
     files: [{ path: destPath, size: fileSize }],

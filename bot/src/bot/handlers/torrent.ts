@@ -9,7 +9,7 @@ export async function handleTorrentFile(ctx: BotContext) {
     return;
   }
 
-  await ctx.reply(`收到種子檔: ${doc.file_name}，正在加入下載...`);
+  const msg = await ctx.reply(`收到種子檔: ${doc.file_name}，正在加入下載...`);
 
   try {
     const file = await ctx.getFile();
@@ -25,28 +25,29 @@ export async function handleTorrentFile(ctx: BotContext) {
       buffer = Buffer.from(await response.arrayBuffer());
     }
 
-    const hash = await ctx.qb.addTorrentFile(buffer, doc.file_name, {
-      savepath: config.paths.downloads,
-    });
+    const hash = await ctx.qb.addTorrentFile(buffer, doc.file_name, {});
 
     if (!hash) {
-      await ctx.reply("qBittorrent 無法解析此種子檔案。");
+      await ctx.api.editMessageText(msg.chat.id, msg.message_id, "qBittorrent 無法解析此種子檔案。");
       return;
     }
 
-    // Add trackers
     const trackers = getTrackers();
     if (trackers.length > 0) {
       await ctx.qb.addTrackers(hash, trackers);
     }
 
-    ctx.monitor.track(hash, ctx.chat!.id);
-    await ctx.reply(`已加入下載佇列\nHash: \`${hash}\``, {
-      parse_mode: "Markdown",
-    });
+    await ctx.api.editMessageText(
+      msg.chat.id,
+      msg.message_id,
+      `已加入下載佇列\nHash: \`${hash}\`\n進度: 0%`,
+      { parse_mode: "Markdown" }
+    );
+
+    ctx.monitor.track(hash, msg.chat.id, msg.message_id);
     logger.info({ hash, filename: doc.file_name }, "Torrent added");
   } catch (err) {
     logger.error(err, "Failed to add torrent file");
-    await ctx.reply(`加入種子失敗: ${err}`);
+    await ctx.api.editMessageText(msg.chat.id, msg.message_id, `加入種子失敗: ${err}`);
   }
 }

@@ -4,6 +4,7 @@ import { QBClient } from "./qb/client.js";
 import { startTrackerUpdater } from "./qb/trackers.js";
 import { DownloadMonitor } from "./monitor/index.js";
 import { Pipeline } from "./pipeline/index.js";
+import { startCleanupScheduler } from "./cleanup/index.js";
 import fs from "node:fs";
 
 async function connectWithRetry(qb: QBClient, maxRetries = 30, interval = 3000) {
@@ -29,6 +30,7 @@ async function main() {
   logger.info("Connected to qBittorrent");
 
   startTrackerUpdater();
+  startCleanupScheduler(qb);
 
   const monitor = new DownloadMonitor(qb);
   const services: Services = { qb, monitor };
@@ -36,6 +38,7 @@ async function main() {
   const pipeline = new Pipeline(bot.api);
   services.pipeline = pipeline;
   monitor.setPipeline(pipeline);
+  monitor.setApi(bot.api);
 
   monitor.start();
   logger.info("Download monitor started");

@@ -5,31 +5,32 @@ import { getTrackers } from "../../qb/trackers.js";
 export async function handleMagnet(ctx: BotContext) {
   const text = ctx.message!.text!.trim();
 
-  await ctx.reply("收到磁力鏈結，正在加入下載...");
+  const msg = await ctx.reply("收到磁力鏈結，正在加入下載...");
 
   try {
-    const hash = await ctx.qb.addTorrentMagnet(text, {
-      savepath: config.paths.downloads,
-    });
+    const hash = await ctx.qb.addTorrentMagnet(text, {});
 
     if (!hash) {
-      await ctx.reply("加入磁力鏈結失敗。");
+      await ctx.api.editMessageText(msg.chat.id, msg.message_id, "加入磁力鏈結失敗。");
       return;
     }
 
-    // Add trackers
     const trackers = getTrackers();
     if (trackers.length > 0) {
       await ctx.qb.addTrackers(hash, trackers);
     }
 
-    ctx.monitor.track(hash, ctx.chat!.id);
-    await ctx.reply(`已加入下載佇列\nHash: \`${hash}\``, {
-      parse_mode: "Markdown",
-    });
+    await ctx.api.editMessageText(
+      msg.chat.id,
+      msg.message_id,
+      `已加入下載佇列\nHash: \`${hash}\`\n進度: 0%`,
+      { parse_mode: "Markdown" }
+    );
+
+    ctx.monitor.track(hash, msg.chat.id, msg.message_id);
     logger.info({ hash }, "Magnet added");
   } catch (err) {
     logger.error(err, "Failed to add magnet");
-    await ctx.reply(`加入磁力鏈結失敗: ${err}`);
+    await ctx.api.editMessageText(msg.chat.id, msg.message_id, `加入磁力鏈結失敗: ${err}`);
   }
 }

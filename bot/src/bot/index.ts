@@ -61,22 +61,24 @@ export function createBot(services: Services) {
 
     if (data.startsWith("r2_yes:")) {
       const jobId = data.slice(7);
+      const chatId = ctx.callbackQuery.message!.chat.id;
+      const messageId = ctx.callbackQuery.message!.message_id;
       await ctx.answerCallbackQuery({ text: "開始上傳到 R2..." });
-      await ctx.editMessageReplyMarkup({ reply_markup: undefined });
+      await ctx.editMessageText("上傳到 R2 中...");
 
       try {
-        const urls = await ctx.pipeline.uploadToR2ForJob(jobId);
+        const urls = await ctx.pipeline.uploadToR2ForJob(jobId, chatId, messageId);
         if (urls.length > 0) {
-          const urlList = urls.map((u, i) => `${i + 1}. ${u}`).join("\n");
-          await ctx.reply(`R2 下載連結 (24hr):\n${urlList}`, {
-            reply_to_message_id: ctx.callbackQuery.message?.message_id,
+          const urlList = urls.join("\n");
+          await ctx.editMessageText(`R2 下載連結 (24hr):\n${urlList}`, {
+            parse_mode: "Markdown",
           });
         } else {
-          await ctx.reply("找不到待上傳的檔案。");
+          await ctx.editMessageText("找不到待上傳的檔案。");
         }
       } catch (err) {
         logger.error(err, "R2 upload failed");
-        await ctx.reply("上傳到 R2 失敗。");
+        await ctx.editMessageText("上傳到 R2 失敗。");
       }
     }
 
@@ -85,6 +87,27 @@ export function createBot(services: Services) {
       await ctx.answerCallbackQuery({ text: "已跳過 R2 上傳" });
       await ctx.editMessageText("已完成，未上傳到 R2。");
       ctx.pipeline.removePendingR2(jobId);
+    }
+
+    if (data.startsWith("del:")) {
+      const jobId = data.slice(4);
+      await ctx.pipeline.deleteJobAndTorrent(jobId, ctx.qb);
+      await ctx.answerCallbackQuery({ text: "已刪除" });
+      await ctx.editMessageText("已刪除原始檔案及 qBittorrent 任務。");
+    }
+
+    if (data.startsWith("cancel:")) {
+      const hash = data.slice(7);
+      const tracked = ctx.monitor.getTracked(hash);
+      if (tracked) {
+        await ctx.monitor.cancelTorrent(hash);
+        const currentText = ctx.callbackQuery.message?.text || "";
+        const name = currentText.split("\n")[0];
+        await ctx.answerCallbackQuery({ text: "已取消下載" });
+        await ctx.editMessageText(`~${name}~\n\n已取消`, { parse_mode: "Markdown" });
+      } else {
+        await ctx.answerCallbackQuery({ text: "找不到此下載任務" });
+      }
     }
   });
 

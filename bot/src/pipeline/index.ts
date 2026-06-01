@@ -1,16 +1,27 @@
-import { Api, InputFile, InlineKeyboard } from "grammy";
+import { Api, InlineKeyboard } from "grammy";
 import { config, logger } from "../config.js";
-import { JobQueue, PipelineJob } from "./queue.js";
 import { splitToZip } from "./zipper.js";
+import { compressVideo } from "./ffmpeg.js";
 import { uploadToR2, getPresignedUrl } from "../storage/r2.js";
 import { uploadToTelegram } from "../storage/telegram.js";
-import { getFilesInDir } from "./utils.js";
+import { getFilesInDir, isVideoFile } from "./utils.js";
+import { QBClient } from "../qb/client.js";
+import {
+  addPipelineJob,
+  updateJobStatus,
+  getNextPendingJob,
+  addPendingAction,
+  getPendingAction,
+  removePendingAction,
+  getJobById,
+} from "../db/index.js";
 import path from "node:path";
 import fs from "node:fs";
 
 export interface CompletedTorrent {
   torrentId: string;
   chatId: number;
+  messageId: number;
   name: string;
   savePath: string;
   files: Array<{ path: string; size: number }>;
@@ -19,115 +30,183 @@ export interface CompletedTorrent {
 
 export class Pipeline {
   private api: Api;
-  private queue: JobQueue;
   private processing = false;
-  private pendingR2 = new Map<string, { chatId: number; files: string[]; jobId: string }>();
 
   constructor(api: Api) {
     this.api = api;
-    this.queue = new JobQueue(config.paths.queue);
+    this.resumePending();
   }
 
-  getPendingR2(jobId: string) {
-    return this.pendingR2.get(jobId);
-  }
-
-  removePendingR2(jobId: string) {
-    this.pendingR2.delete(jobId);
+  private resumePending() {
+    const job = getNextPendingJob();
+    if (job) {
+      logger.info({ jobId: job.id, name: job.name }, "Resuming pending job from DB");
+      this.processNext();
+    }
   }
 
   enqueue(torrent: CompletedTorrent) {
-    const job: PipelineJob = {
-      id: `${Date.now()}-${torrent.torrentId.slice(0, 8)}`,
+    const id = `${Date.now()}-${torrent.torrentId.slice(0, 8)}`;
+    addPipelineJob({
+      id,
       torrentId: torrent.torrentId,
       chatId: torrent.chatId,
+      messageId: torrent.messageId,
       name: torrent.name,
       savePath: torrent.savePath,
       files: torrent.files,
       totalSize: torrent.totalSize,
       status: "pending",
-    };
+    });
 
-    this.queue.add(job);
-    logger.info({ jobId: job.id, name: job.name }, "Job enqueued");
+    logger.info({ jobId: id, name: torrent.name }, "Job enqueued");
     this.processNext();
   }
 
   private async processNext() {
     if (this.processing) return;
 
-    const job = this.queue.next();
+    const job = getNextPendingJob();
     if (!job) return;
 
     this.processing = true;
-    job.status = "processing";
-    this.queue.save();
+    updateJobStatus(job.id, "processing");
 
     try {
-      await this.api.sendMessage(job.chatId, `開始處理: ${job.name}`);
+      // Edit the existing progress message
+      await this.editStatus(job.chat_id, job.message_id, `${job.name}\n\n處理中...`);
 
-      const outputFiles = await this.processFiles(job);
+      const outputFiles = await this.processFiles(config.paths.downloads, job.name);
+      const downloadPath = path.join(config.paths.downloads, job.name);
 
-      // Send first file as the thread starter
-      const threadMsg = await this.api.sendMessage(
-        job.chatId,
-        `上傳中: ${job.name} (${outputFiles.length} 個檔案)`
+      await this.editStatus(
+        job.chat_id,
+        job.message_id,
+        `${job.name}\n\n上傳到 Telegram 中... (${outputFiles.length} 個檔案)`
       );
-      const threadId = threadMsg.message_id;
 
       for (const file of outputFiles) {
-        await uploadToTelegram(this.api, job.chatId, file, threadId);
+        await uploadToTelegram(this.api, job.chat_id, file, job.message_id);
       }
 
-      // Ask user if they want to upload to R2
-      this.pendingR2.set(job.id, { chatId: job.chatId, files: outputFiles, jobId: job.id });
+      addPendingAction(job.id, job.chat_id, outputFiles, downloadPath);
 
       const keyboard = new InlineKeyboard()
         .text("上傳到 R2", `r2_yes:${job.id}`)
-        .text("不用了", `r2_no:${job.id}`);
+        .text("不用了", `r2_no:${job.id}`)
+        .row()
+        .text("刪除原始檔", `del:${job.id}`);
 
-      await this.api.sendMessage(
-        job.chatId,
-        `Telegram 上傳完成: ${job.name}\n要上傳到 R2 產生 24hr 下載連結嗎？`,
-        { reply_to_message_id: threadId, reply_markup: keyboard }
+      await this.api.editMessageText(
+        job.chat_id,
+        job.message_id,
+        `${job.name}\n\nTelegram 上傳完成\n要上傳到 R2 產生 24hr 下載連結嗎？`,
+        { reply_markup: keyboard }
       );
 
-      job.status = "done";
-      this.queue.save();
+      updateJobStatus(job.id, "done");
     } catch (err) {
       logger.error(err, "Pipeline error");
-      job.status = "failed";
-      this.queue.save();
-      await this.api.sendMessage(job.chatId, `處理失敗: ${job.name}\n${err}`).catch(() => {});
+      updateJobStatus(job.id, "failed");
+      await this.editStatus(job.chat_id, job.message_id, `${job.name}\n\n處理失敗: ${err}`);
     } finally {
       this.processing = false;
       this.processNext();
     }
   }
 
-  async uploadToR2ForJob(jobId: string): Promise<string[]> {
-    const pending = this.pendingR2.get(jobId);
+  private async editStatus(chatId: number, messageId: number, text: string) {
+    try {
+      await this.api.editMessageText(chatId, messageId, text);
+    } catch (err: any) {
+      if (err?.error_code === 429) {
+        const retryAfter = err?.parameters?.retry_after || 5;
+        await new Promise((r) => setTimeout(r, retryAfter * 1000));
+        try { await this.api.editMessageText(chatId, messageId, text); } catch {}
+      } else if (!err?.description?.includes("message is not modified")) {
+        logger.error(err, "Failed to edit status message");
+      }
+    }
+  }
+
+  async uploadToR2ForJob(jobId: string, chatId: number, messageId: number): Promise<string[]> {
+    const pending = getPendingAction(jobId);
     if (!pending) return [];
 
+    const files: string[] = JSON.parse(pending.files);
     const urls: string[] = [];
-    for (const file of pending.files) {
+
+    for (const file of files) {
       const filename = path.basename(file);
       const r2Key = `${jobId}/${filename}`;
       await uploadToR2(file, r2Key);
       const url = await getPresignedUrl(r2Key);
-      urls.push(url);
+      urls.push(`[${filename}](${url})`);
     }
 
-    this.cleanup(pending.files);
-    this.pendingR2.delete(jobId);
+    this.cleanupProcessing(files);
+    this.deleteDownload(pending.download_path);
+    removePendingAction(jobId);
     return urls;
   }
 
-  private async processFiles(job: PipelineJob): Promise<string[]> {
+  getPendingR2(jobId: string) {
+    return getPendingAction(jobId);
+  }
+
+  removePendingR2(jobId: string) {
+    removePendingAction(jobId);
+  }
+
+  deleteJobFiles(jobId: string) {
+    const pending = getPendingAction(jobId);
+    if (!pending) return;
+    const files: string[] = JSON.parse(pending.files);
+    this.cleanupProcessing(files);
+    this.deleteDownload(pending.download_path);
+    removePendingAction(jobId);
+  }
+
+  async deleteJobAndTorrent(jobId: string, qb: QBClient) {
+    const job = getJobById(jobId);
+    const pending = getPendingAction(jobId);
+
+    if (pending) {
+      const files: string[] = JSON.parse(pending.files);
+      this.cleanupProcessing(files);
+      this.deleteDownload(pending.download_path);
+      removePendingAction(jobId);
+    }
+
+    if (job) {
+      try {
+        await qb.deleteTorrent(job.torrent_id, true);
+      } catch (err) {
+        logger.error(err, "Failed to delete torrent from qBittorrent");
+      }
+    }
+  }
+
+  deleteDownload(downloadPath: string) {
+    try {
+      if (!fs.existsSync(downloadPath)) return;
+      const stat = fs.statSync(downloadPath);
+      if (stat.isDirectory()) {
+        fs.rmSync(downloadPath, { recursive: true, force: true });
+      } else {
+        fs.unlinkSync(downloadPath);
+      }
+      logger.info({ path: downloadPath }, "Deleted download");
+    } catch (err) {
+      logger.error(err, "Failed to delete download");
+    }
+  }
+
+  private async processFiles(savePath: string, name: string): Promise<string[]> {
     const outputFiles: string[] = [];
     const targetSize = config.split.targetSizeMb;
 
-    const torrentPath = path.join(job.savePath, job.name);
+    const torrentPath = path.join(savePath, name);
     const stat = fs.statSync(torrentPath);
     const allFiles = stat.isDirectory() ? getFilesInDir(torrentPath) : [torrentPath];
 
@@ -137,6 +216,14 @@ export class Pipeline {
 
       if (sizeMb <= targetSize) {
         outputFiles.push(filePath);
+      } else if (isVideoFile(filePath)) {
+        const compressed = await compressVideo(filePath, targetSize);
+        if (compressed) {
+          outputFiles.push(compressed);
+        } else {
+          const parts = await splitToZip(filePath, targetSize);
+          outputFiles.push(...parts);
+        }
       } else {
         const parts = await splitToZip(filePath, targetSize);
         outputFiles.push(...parts);
@@ -146,7 +233,7 @@ export class Pipeline {
     return outputFiles;
   }
 
-  private cleanup(files: string[]) {
+  private cleanupProcessing(files: string[]) {
     for (const file of files) {
       if (file.startsWith(config.paths.processing)) {
         try { fs.unlinkSync(file); } catch {}

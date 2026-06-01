@@ -19,44 +19,52 @@ export class QBClient {
   private async login(): Promise<void> {
     const res = await fetch(`${this.baseUrl}/auth/login`, {
       method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Referer": `http://${this.config.host}:${this.config.port}`,
+      },
       body: `username=${encodeURIComponent(this.config.username)}&password=${encodeURIComponent(this.config.password)}`,
     });
 
-    if (res.status !== 200) {
-      throw new Error(`qBittorrent login failed: HTTP ${res.status}`);
-    }
-
     const text = await res.text();
-    if (text !== "Ok.") {
-      throw new Error(`qBittorrent login failed: ${text}`);
-    }
-
     const setCookie = res.headers.get("set-cookie");
+
     if (setCookie) {
       this.cookie = setCookie.split(";")[0];
     }
+
+    // Some versions return 200 "Ok.", others return 200 "Fails.", others 403
+    if (text === "Fails." || res.status === 403) {
+      throw new Error(`qBittorrent login failed: ${text || `HTTP ${res.status}`}`);
+    }
+
+    if (!this.cookie) {
+      throw new Error(`qBittorrent login failed: no session cookie received (HTTP ${res.status})`);
+    }
+
+    logger.info("qBittorrent login successful");
   }
 
   private async request(path: string, options: RequestInit = {}): Promise<Response> {
     if (!this.cookie) await this.login();
 
+    const headers: Record<string, string> = {
+      ...(options.headers as Record<string, string> || {}),
+      Cookie: this.cookie!,
+      Referer: `http://${this.config.host}:${this.config.port}`,
+    };
+
     const res = await fetch(`${this.baseUrl}${path}`, {
       ...options,
-      headers: {
-        ...options.headers,
-        Cookie: this.cookie!,
-      },
+      headers,
     });
 
     if (res.status === 403) {
       await this.login();
+      headers.Cookie = this.cookie!;
       return fetch(`${this.baseUrl}${path}`, {
         ...options,
-        headers: {
-          ...options.headers,
-          Cookie: this.cookie!,
-        },
+        headers,
       });
     }
 
@@ -74,11 +82,24 @@ export class QBClient {
     });
 
     const text = await res.text();
-    if (text !== "Ok.") {
-      throw new Error(`Failed to add torrent: ${text}`);
+
+    // Newer versions return JSON with added_torrent_ids
+    try {
+      const json = JSON.parse(text);
+      if (json.added_torrent_ids?.length > 0) {
+        return json.added_torrent_ids[0];
+      }
+      if (json.failure_count > 0) {
+        throw new Error(`Failed to add torrent: ${text}`);
+      }
+    } catch (e) {
+      // Older versions return "Ok." or "Fails."
+      if (text === "Fails.") {
+        throw new Error("Failed to add torrent");
+      }
     }
 
-    // qBittorrent doesn't return hash directly, wait briefly and find it
+    // Fallback: search for the torrent
     await new Promise((r) => setTimeout(r, 1000));
     const torrents = await this.getTorrents();
     const found = torrents.find((t) => t.name.includes(filename.replace(".torrent", "")));
@@ -96,11 +117,19 @@ export class QBClient {
     });
 
     const text = await res.text();
-    if (text !== "Ok.") {
-      throw new Error(`Failed to add magnet: ${text}`);
+
+    try {
+      const json = JSON.parse(text);
+      if (json.added_torrent_ids?.length > 0) {
+        return json.added_torrent_ids[0];
+      }
+    } catch {
+      if (text === "Fails.") {
+        throw new Error("Failed to add magnet");
+      }
     }
 
-    // Extract hash from magnet URI
+    // Fallback: extract hash from magnet URI
     const hashMatch = uri.match(/btih:([a-fA-F0-9]{40})/i) ||
       uri.match(/btih:([a-zA-Z2-7]{32})/i);
     if (hashMatch) {
@@ -123,8 +152,16 @@ export class QBClient {
     });
 
     const text = await res.text();
-    if (text !== "Ok.") {
-      throw new Error(`Failed to add URL: ${text}`);
+
+    try {
+      const json = JSON.parse(text);
+      if (json.added_torrent_ids?.length > 0) {
+        return json.added_torrent_ids[0];
+      }
+    } catch {
+      if (text === "Fails.") {
+        throw new Error("Failed to add URL torrent");
+      }
     }
 
     await new Promise((r) => setTimeout(r, 2000));
@@ -154,6 +191,14 @@ export class QBClient {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: `hashes=${hash}&deleteFiles=${deleteFiles}`,
+    });
+  }
+
+  async pauseTorrent(hash: string): Promise<void> {
+    await this.request(`/torrents/pause`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: `hashes=${hash}`,
     });
   }
 

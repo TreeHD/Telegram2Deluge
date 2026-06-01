@@ -3,17 +3,17 @@ services:
     image: linuxserver/qbittorrent:latest
     restart: unless-stopped
     environment:
-      - PUID=1000
-      - PGID=1000
+      - PUID=0
+      - PGID=0
       - TZ=Asia/Taipei
       - WEBUI_PORT=8080
     volumes:
       - ./data/qb-config:/config
-      - ./data/downloads:/data/downloads
+      - ./data/downloads:/downloads
     ports:
       - "8080:8080"
-      - "6881-6891:6881-6891"
-      - "6881-6891:6881-6891/udp"
+      - "6891:6891"
+      - "6891:6891/udp"
 
   telegram-bot-api:
     image: aiogram/telegram-bot-api:latest
@@ -27,8 +27,8 @@ services:
       - TELEGRAM_LOCAL=true
     volumes:
       - ./data/telegram-bot-api:/var/lib/telegram-bot-api
-      - ./data/downloads:/data/downloads
-      - ./data/processing:/data/processing
+      - ./data/downloads:/downloads
+      - ./data/processing:/processing
 
   bot:
     image: ghcr.io/treehd/telegram2deluge:latest
@@ -39,7 +39,7 @@ services:
       - telegram-bot-api
     env_file: .env
     volumes:
-      - ./data/downloads:/data/downloads
-      - ./data/processing:/data/processing
+      - ./data/downloads:/downloads
+      - ./data/processing:/processing
       - ./data/queue:/data/queue
       - ./data/telegram-bot-api:/var/lib/telegram-bot-api
