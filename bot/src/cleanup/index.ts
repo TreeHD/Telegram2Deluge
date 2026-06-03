@@ -16,14 +16,15 @@ export function startCleanupScheduler(qb: QBClient) {
 }
 
 async function cleanup() {
-  const maxAgeMs = config.cleanup.maxAgeHours * 60 * 60 * 1000;
-  const now = Date.now();
+  try {
+    const maxAgeMs = config.cleanup.maxAgeHours * 60 * 60 * 1000;
+    const now = Date.now();
 
-  // Clean up old files from disk
-  cleanupDisk(maxAgeMs, now);
-
-  // Clean up old completed torrents from qBittorrent
-  await cleanupQB(maxAgeMs, now);
+    cleanupDisk(maxAgeMs, now);
+    await cleanupQB(maxAgeMs, now);
+  } catch (err) {
+    logger.error(err, "Cleanup cycle failed");
+  }
 }
 
 function cleanupDisk(maxAgeMs: number, now: number) {

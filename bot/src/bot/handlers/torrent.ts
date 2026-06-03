@@ -34,7 +34,11 @@ export async function handleTorrentFile(ctx: BotContext) {
 
     const trackers = getTrackers();
     if (trackers.length > 0) {
-      await ctx.qb.addTrackers(hash, trackers);
+      try {
+        await ctx.qb.addTrackers(hash, trackers);
+      } catch (err) {
+        logger.error(err, "Failed to add trackers");
+      }
     }
 
     await ctx.api.editMessageText(
@@ -48,6 +52,8 @@ export async function handleTorrentFile(ctx: BotContext) {
     logger.info({ hash, filename: doc.file_name }, "Torrent added");
   } catch (err) {
     logger.error(err, "Failed to add torrent file");
-    await ctx.api.editMessageText(msg.chat.id, msg.message_id, `加入種子失敗: ${err}`);
+    try {
+      await ctx.api.editMessageText(msg.chat.id, msg.message_id, `加入種子失敗: ${err}`);
+    } catch {}
   }
 }

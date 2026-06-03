@@ -68,7 +68,11 @@ export class DownloadMonitor {
 
     this.tracked.delete(hash);
     removeTrackedTorrent(hash);
-    await this.qb.deleteTorrent(hash, true);
+    try {
+      await this.qb.deleteTorrent(hash, true);
+    } catch (err) {
+      logger.error(err, "Failed to delete torrent on cancel");
+    }
     return true;
   }
 

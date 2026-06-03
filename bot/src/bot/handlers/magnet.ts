@@ -17,7 +17,11 @@ export async function handleMagnet(ctx: BotContext) {
 
     const trackers = getTrackers();
     if (trackers.length > 0) {
-      await ctx.qb.addTrackers(hash, trackers);
+      try {
+        await ctx.qb.addTrackers(hash, trackers);
+      } catch (err) {
+        logger.error(err, "Failed to add trackers");
+      }
     }
 
     await ctx.api.editMessageText(
@@ -31,6 +35,8 @@ export async function handleMagnet(ctx: BotContext) {
     logger.info({ hash }, "Magnet added");
   } catch (err) {
     logger.error(err, "Failed to add magnet");
-    await ctx.api.editMessageText(msg.chat.id, msg.message_id, `加入磁力鏈結失敗: ${err}`);
+    try {
+      await ctx.api.editMessageText(msg.chat.id, msg.message_id, `加入磁力鏈結失敗: ${err}`);
+    } catch {}
   }
 }

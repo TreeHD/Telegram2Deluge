@@ -4,7 +4,7 @@ import { splitToZip } from "./zipper.js";
 import { compressVideo } from "./ffmpeg.js";
 import { uploadToR2, getPresignedUrl } from "../storage/r2.js";
 import { uploadToTelegram, buildMessageLink } from "../storage/telegram.js";
-import { getFilesInDir, isVideoFile } from "./utils.js";
+import { isVideoFile } from "./utils.js";
 import { QBClient } from "../qb/client.js";
 import { withRetry } from "../utils/retry.js";
 import { escapeHtml, escapeHref } from "../utils/html.js";
@@ -77,8 +77,9 @@ export class Pipeline {
     try {
       await this.editStatus(job.chat_id, job.message_id, `${job.name}\n\n處理中...`);
 
-      const outputFiles = await this.processFiles(config.paths.downloads, job.name);
-      const downloadPath = path.join(config.paths.downloads, job.name);
+      const jobFiles: Array<{ path: string; size: number }> = JSON.parse(job.files);
+      const outputFiles = await this.processFiles(job.save_path, jobFiles);
+      const downloadPath = this.resolveDownloadPath(job.save_path, jobFiles);
 
       const uploadChatId = config.uploadChatId || job.chat_id;
 
@@ -217,15 +218,30 @@ export class Pipeline {
     }
   }
 
-  private async processFiles(savePath: string, name: string): Promise<string[]> {
+  private resolveDownloadPath(savePath: string, files: Array<{ path: string; size: number }>): string {
+    if (files.length === 0) return savePath;
+    // qB file paths are relative to savePath, e.g. "TorrentName/file.mp4" or just "file.mp4"
+    const first = files[0].path;
+    const topDir = first.split("/")[0];
+    // If all files share the same top-level directory, that's the download folder to clean up
+    if (files.length > 1 || first.includes("/")) {
+      return path.join(savePath, topDir);
+    }
+    return path.join(savePath, first);
+  }
+
+  private async processFiles(savePath: string, files: Array<{ path: string; size: number }>): Promise<string[]> {
     const outputFiles: string[] = [];
     const targetSize = config.split.targetSizeMb;
 
-    const torrentPath = path.join(savePath, name);
-    const stat = fs.statSync(torrentPath);
-    const allFiles = stat.isDirectory() ? getFilesInDir(torrentPath) : [torrentPath];
+    for (const file of files) {
+      const filePath = path.join(savePath, file.path);
 
-    for (const filePath of allFiles) {
+      if (!fs.existsSync(filePath)) {
+        logger.warn({ path: filePath }, "File not found, skipping");
+        continue;
+      }
+
       const fileSize = fs.statSync(filePath).size;
       const sizeMb = fileSize / 1024 / 1024;
 

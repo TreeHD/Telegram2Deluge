@@ -7,6 +7,15 @@ import { Pipeline } from "./pipeline/index.js";
 import { startCleanupScheduler } from "./cleanup/index.js";
 import fs from "node:fs";
 
+process.on("unhandledRejection", (err) => {
+  logger.error(err, "Unhandled rejection");
+});
+
+process.on("uncaughtException", (err) => {
+  logger.fatal(err, "Uncaught exception");
+  process.exit(1);
+});
+
 async function connectWithRetry(qb: QBClient, maxRetries = 30, interval = 3000) {
   for (let i = 1; i <= maxRetries; i++) {
     try {
