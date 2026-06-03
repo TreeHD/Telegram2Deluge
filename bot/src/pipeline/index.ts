@@ -95,7 +95,8 @@ export class Pipeline {
         const result = await uploadToTelegram(this.api, uploadChatId, file);
         const link = buildMessageLink(uploadChatId, result.messageId);
         const filename = path.basename(file);
-        fileLinks.push(`<a href="${escapeHref(link)}">${escapeHtml(filename)}</a>`);
+        const displayName = truncateFilename(filename, 60);
+        fileLinks.push(`<a href="${escapeHref(link)}">${escapeHtml(displayName)}</a>`);
 
         await this.editStatus(
           job.chat_id,
@@ -112,17 +113,30 @@ export class Pipeline {
         .row()
         .text("刪除原始檔", `del:${job.id}`);
 
-      const text = `${escapeHtml(job.name)}\n\n` +
-        fileLinks.join("\n") +
-        `\n\n選擇後續動作：`;
+      const header = `${escapeHtml(truncateFilename(job.name, 100))}\n\n`;
+      const footer = `\n\n選擇後續動作：`;
+      const chunks = splitLinksIntoChunks(fileLinks, 4000 - header.length - footer.length);
 
+      // First chunk: edit the original message
+      const firstText = header + chunks[0] + footer;
       await withRetry(async () => {
-        await this.api.editMessageText(job.chat_id, job.message_id, text, {
+        await this.api.editMessageText(job.chat_id, job.message_id, firstText, {
           parse_mode: "HTML",
           link_preview_options: { is_disabled: true },
           reply_markup: keyboard,
         });
       }, "pipeline:finalEdit");
+
+      // Remaining chunks: send as new messages in the thread
+      for (let i = 1; i < chunks.length; i++) {
+        await withRetry(async () => {
+          await this.api.sendMessage(job.chat_id, chunks[i], {
+            parse_mode: "HTML",
+            link_preview_options: { is_disabled: true },
+            reply_to_message_id: job.message_id,
+          } as any);
+        }, "pipeline:overflowMessage");
+      }
 
       updateJobStatus(job.id, "done");
     } catch (err) {
@@ -271,4 +285,40 @@ export class Pipeline {
       }
     }
   }
+}
+
+function truncateFilename(name: string, maxLen: number): string {
+  if (name.length <= maxLen) return name;
+  const ext = path.extname(name);
+  const base = name.slice(0, maxLen - ext.length - 3);
+  return `${base}...${ext}`;
+}
+
+function splitLinksIntoChunks(links: string[], firstChunkMax: number): string[] {
+  const chunks: string[] = [];
+  let current = "";
+
+  const maxLen = firstChunkMax;
+
+  for (const link of links) {
+    const line = current.length === 0 ? link : `\n${link}`;
+    const limit = chunks.length === 0 ? maxLen : 4000;
+
+    if (current.length + line.length > limit) {
+      if (current.length > 0) {
+        chunks.push(current);
+        current = link;
+      } else {
+        chunks.push(link);
+      }
+    } else {
+      current += line;
+    }
+  }
+
+  if (current.length > 0) {
+    chunks.push(current);
+  }
+
+  return chunks.length > 0 ? chunks : [""];
 }
