@@ -87,7 +87,11 @@ export function createBot(services: Services) {
         const jobId = data.slice(4);
         await ctx.pipeline.deleteJobAndTorrent(jobId, ctx.qb);
         await ctx.answerCallbackQuery({ text: "已刪除" });
-        await ctx.editMessageText("已刪除原始檔案及 qBittorrent 任務。");
+        const currentText = ctx.callbackQuery.message?.text || "";
+        await ctx.editMessageText(
+          `${escapeHtml(currentText)}\n\n🗑️ 已刪除原始檔案及 qBittorrent 任務。`,
+          { parse_mode: "HTML", link_preview_options: { is_disabled: true } }
+        );
       } else if (data.startsWith("cancel:")) {
         const hash = data.slice(7);
         const tracked = ctx.monitor.getTracked(hash);
