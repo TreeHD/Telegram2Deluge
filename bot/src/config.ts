@@ -22,6 +22,8 @@ export const config = {
     .filter((s) => s.trim())
     .map((id) => parseInt(id.trim(), 10)),
 
+  uploadChatId: parseInt(optional("UPLOAD_CHAT_ID", "0"), 10),
+
   qb: {
     host: optional("QB_HOST", "localhost"),
     port: parseInt(optional("QB_PORT", "8080"), 10),

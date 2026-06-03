@@ -3,7 +3,7 @@ import { config, logger } from "../config.js";
 import { splitToZip } from "./zipper.js";
 import { compressVideo } from "./ffmpeg.js";
 import { uploadToR2, getPresignedUrl } from "../storage/r2.js";
-import { uploadToTelegram } from "../storage/telegram.js";
+import { uploadToTelegram, buildMessageLink } from "../storage/telegram.js";
 import { getFilesInDir, isVideoFile } from "./utils.js";
 import { QBClient } from "../qb/client.js";
 import { withRetry } from "../utils/retry.js";
@@ -75,20 +75,32 @@ export class Pipeline {
     updateJobStatus(job.id, "processing");
 
     try {
-      // Edit the existing progress message
       await this.editStatus(job.chat_id, job.message_id, `${job.name}\n\n處理中...`);
 
       const outputFiles = await this.processFiles(config.paths.downloads, job.name);
       const downloadPath = path.join(config.paths.downloads, job.name);
 
+      const uploadChatId = config.uploadChatId || job.chat_id;
+
       await this.editStatus(
         job.chat_id,
         job.message_id,
-        `${job.name}\n\n上傳到 Telegram 中... (${outputFiles.length} 個檔案)`
+        `${job.name}\n\n上傳到 Telegram 中... (0/${outputFiles.length})`
       );
 
-      for (const file of outputFiles) {
-        await uploadToTelegram(this.api, job.chat_id, file, job.message_id);
+      const fileLinks: string[] = [];
+      for (let i = 0; i < outputFiles.length; i++) {
+        const file = outputFiles[i];
+        const result = await uploadToTelegram(this.api, uploadChatId, file);
+        const link = buildMessageLink(uploadChatId, result.messageId);
+        const filename = path.basename(file);
+        fileLinks.push(`<a href="${escapeHref(link)}">${escapeHtml(filename)}</a>`);
+
+        await this.editStatus(
+          job.chat_id,
+          job.message_id,
+          `${job.name}\n\n上傳到 Telegram 中... (${i + 1}/${outputFiles.length})`
+        );
       }
 
       addPendingAction(job.id, job.chat_id, outputFiles, downloadPath);
@@ -99,12 +111,17 @@ export class Pipeline {
         .row()
         .text("刪除原始檔", `del:${job.id}`);
 
-      await this.api.editMessageText(
-        job.chat_id,
-        job.message_id,
-        `${job.name}\n\nTelegram 上傳完成\n要上傳到 R2 產生 24hr 下載連結嗎？`,
-        { reply_markup: keyboard }
-      );
+      const text = `${escapeHtml(job.name)}\n\n` +
+        fileLinks.join("\n") +
+        `\n\n選擇後續動作：`;
+
+      await withRetry(async () => {
+        await this.api.editMessageText(job.chat_id, job.message_id, text, {
+          parse_mode: "HTML",
+          link_preview_options: { is_disabled: true },
+          reply_markup: keyboard,
+        });
+      }, "pipeline:finalEdit");
 
       updateJobStatus(job.id, "done");
     } catch (err) {

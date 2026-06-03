@@ -5,12 +5,17 @@ import path from "node:path";
 import { isVideoFile } from "../pipeline/utils.js";
 import { withRetry } from "../utils/retry.js";
 
+export interface UploadResult {
+  messageId: number;
+  chatId: number;
+}
+
 export async function uploadToTelegram(
   api: Api,
   chatId: number,
   filePath: string,
   replyToMessageId?: number
-): Promise<void> {
+): Promise<UploadResult> {
   const filename = path.basename(filePath);
   const fileSize = fs.statSync(filePath).size;
   const sizeMb = (fileSize / 1024 / 1024).toFixed(0);
@@ -27,14 +32,23 @@ export async function uploadToTelegram(
     opts.reply_to_message_id = replyToMessageId;
   }
 
-  await withRetry(async () => {
+  const msg = await withRetry(async () => {
     if (isVideoFile(filePath)) {
       opts.supports_streaming = true;
-      await api.sendVideo(chatId, inputFile, opts);
+      return api.sendVideo(chatId, inputFile, opts);
     } else {
-      await api.sendDocument(chatId, inputFile, opts);
+      return api.sendDocument(chatId, inputFile, opts);
     }
   }, `uploadToTelegram:${filename}`);
 
-  logger.info({ filename }, "Uploaded to Telegram");
+  logger.info({ filename, messageId: msg.message_id }, "Uploaded to Telegram");
+  return { messageId: msg.message_id, chatId };
+}
+
+// Build a t.me link for a message in a private supergroup/channel.
+// Private supergroup chat IDs look like -100XXXXXXXXXX; strip the -100 prefix.
+export function buildMessageLink(chatId: number, messageId: number): string {
+  const idStr = String(chatId);
+  const stripped = idStr.startsWith("-100") ? idStr.slice(4) : idStr.replace("-", "");
+  return `https://t.me/c/${stripped}/${messageId}`;
 }
