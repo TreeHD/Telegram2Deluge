@@ -11,6 +11,9 @@ import { handleDisk } from "./handlers/disk.js";
 import { handleList } from "./handlers/list.js";
 import { escapeHtml } from "../utils/html.js";
 import { withRetry } from "../utils/retry.js";
+import { getJobById } from "../db/index.js";
+import fs from "node:fs";
+import path from "node:path";
 
 export interface BotContext extends Context {
   qb: QBClient;
@@ -131,6 +134,64 @@ export function createBot(services: Services) {
         } else {
           await ctx.answerCallbackQuery({ text: "找不到此下載任務" });
         }
+      } else if (data.startsWith("info:")) {
+        const hash = data.slice(5);
+        await ctx.answerCallbackQuery();
+        const torrent = await ctx.qb.getTorrentInfo(hash);
+        if (torrent) {
+          const progress = Math.floor(torrent.progress * 100);
+          const speed = (torrent.dlspeed / 1024 / 1024).toFixed(2);
+          const uploaded = (torrent.uploaded / 1024 / 1024 / 1024).toFixed(2);
+          const size = (torrent.size / 1024 / 1024 / 1024).toFixed(2);
+          const eta = torrent.eta > 0 && torrent.eta < 8640000 ? formatEta(torrent.eta) : "N/A";
+          const text =
+            `<b>${escapeHtml(torrent.name)}</b>\n\n` +
+            `進度: ${progress}% | 狀態: ${torrent.state}\n` +
+            `大小: ${size} GB | 已上傳: ${uploaded} GB\n` +
+            `速度: ${speed} MB/s | ETA: ${eta}\n` +
+            `Hash: <code>${hash}</code>`;
+          await withRetry(async () => {
+            await bot.api.sendMessage(chatId, text, {
+              parse_mode: "HTML",
+              link_preview_options: { is_disabled: true },
+            });
+          }, "info:torrent");
+        } else {
+          await withRetry(async () => {
+            await bot.api.sendMessage(chatId, "找不到此下載任務，可能已完成或被刪除。");
+          }, "info:notfound");
+        }
+      } else if (data.startsWith("info_job:")) {
+        const jobId = data.slice(9);
+        await ctx.answerCallbackQuery();
+        const pending = ctx.pipeline.getPendingR2(jobId);
+        if (pending) {
+          const job = getJobById(jobId);
+          const files: string[] = JSON.parse(pending.files);
+          const existingFiles = files.filter((f) => fs.existsSync(f));
+          const name = job?.name || jobId;
+          const fileList = existingFiles.map((f) => `• ${escapeHtml(path.basename(f))}`).slice(0, 20);
+          const keyboard = new InlineKeyboard()
+            .text("上傳 R2", `r2_yes:${jobId}`)
+            .text("上傳 Filebin", `fb_yes:${jobId}`)
+            .row()
+            .text("🗑️ 刪除原始檔", `del:${jobId}`);
+          const text =
+            `<b>${escapeHtml(name.slice(0, 100))}</b>\n\n` +
+            `檔案 (${existingFiles.length}):\n${fileList.join("\n")}` +
+            (existingFiles.length > 20 ? `\n... +${existingFiles.length - 20}` : "");
+          await withRetry(async () => {
+            await bot.api.sendMessage(chatId, text, {
+              parse_mode: "HTML",
+              link_preview_options: { is_disabled: true },
+              reply_markup: keyboard,
+            } as any);
+          }, "info_job");
+        } else {
+          await withRetry(async () => {
+            await bot.api.sendMessage(chatId, "此任務已過期或被刪除。");
+          }, "info_job:notfound");
+        }
       }
     } catch (err) {
       logger.error(err, "Callback query handler error");
@@ -172,4 +233,13 @@ async function sendMessage(api: any, chatId: number, text: string) {
       link_preview_options: { is_disabled: true },
     });
   }, "sendMessage");
+}
+
+function formatEta(seconds: number): string {
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
 }

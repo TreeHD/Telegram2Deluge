@@ -15,6 +15,8 @@ export interface TorrentInfo {
   progress: number;
   state: string;
   dlspeed: number;
+  upspeed: number;
+  uploaded: number;
   eta: number;
   size: number;
   save_path: string;
