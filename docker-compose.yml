@@ -45,7 +45,7 @@ services:
       - ./data/queue:/data/queue
 
   stream:
-    build: ./stream
+    image: ghcr.io/treehd/telegram2deluge-stream:latest
     restart: unless-stopped
     network_mode: "service:qbittorrent"
     depends_on:
