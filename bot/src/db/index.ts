@@ -45,6 +45,8 @@ db.exec(`
     filename TEXT NOT NULL,
     file_id TEXT NOT NULL,
     file_size INTEGER NOT NULL DEFAULT 0,
+    chat_id INTEGER NOT NULL DEFAULT 0,
+    message_id INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER DEFAULT (unixepoch())
   );
 
@@ -56,6 +58,14 @@ try {
   db.prepare("SELECT message_id FROM pipeline_jobs LIMIT 1").get();
 } catch {
   db.exec("ALTER TABLE pipeline_jobs ADD COLUMN message_id INTEGER NOT NULL DEFAULT 0");
+}
+
+// Migration: add chat_id/message_id to stream_files if missing
+try {
+  db.prepare("SELECT chat_id FROM stream_files LIMIT 1").get();
+} catch {
+  db.exec("ALTER TABLE stream_files ADD COLUMN chat_id INTEGER NOT NULL DEFAULT 0");
+  db.exec("ALTER TABLE stream_files ADD COLUMN message_id INTEGER NOT NULL DEFAULT 0");
 }
 
 // Tracked torrents
@@ -120,10 +130,10 @@ export function getJobById(jobId: string): { id: string; torrent_id: string; cha
 }
 
 // Stream files
-export function addStreamFile(jobId: string, filename: string, fileId: string, fileSize: number) {
+export function addStreamFile(jobId: string, filename: string, fileId: string, fileSize: number, chatId: number, messageId: number) {
   db.prepare(
-    "INSERT INTO stream_files (job_id, filename, file_id, file_size) VALUES (?, ?, ?, ?)"
-  ).run(jobId, filename, fileId, fileSize);
+    "INSERT INTO stream_files (job_id, filename, file_id, file_size, chat_id, message_id) VALUES (?, ?, ?, ?, ?, ?)"
+  ).run(jobId, filename, fileId, fileSize, chatId, messageId);
 }
 
 export function getStreamFiles(jobId: string): Array<{ filename: string; file_id: string; file_size: number }> {

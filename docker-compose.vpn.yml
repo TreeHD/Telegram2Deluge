@@ -97,11 +97,9 @@ services:
   stream:
     network_mode: !reset ""
     depends_on:
-      - telegram-bot-api
+      - wireguard
     networks:
       - internal
-    environment:
-      - TELEGRAM_API_ROOT=http://telegram-bot-api:8081
 
 networks:
   internal:

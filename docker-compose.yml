@@ -49,10 +49,12 @@ services:
     restart: unless-stopped
     network_mode: "service:qbittorrent"
     depends_on:
-      - telegram-bot-api
+      - qbittorrent
     environment:
       - BOT_TOKEN=${BOT_TOKEN}
-      - TELEGRAM_API_ROOT=http://localhost:8081
+      - TELEGRAM_API_ID=${TELEGRAM_API_ID}
+      - TELEGRAM_API_HASH=${TELEGRAM_API_HASH}
+      - UPLOAD_CHAT_ID=${UPLOAD_CHAT_ID}
       - STREAM_HOST=${STREAM_HOST}
       - STREAM_PORT=8082
       - STREAM_SECRET=${STREAM_SECRET}

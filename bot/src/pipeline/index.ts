@@ -99,7 +99,7 @@ export class Pipeline {
 
         if (result.fileId) {
           const fileSize = fs.statSync(file).size;
-          addStreamFile(job.id, filename, result.fileId, fileSize);
+          addStreamFile(job.id, filename, result.fileId, fileSize, uploadChatId, result.messageId);
         }
       }
 
