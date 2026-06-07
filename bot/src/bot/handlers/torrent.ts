@@ -20,7 +20,7 @@ export async function handleTorrentFile(ctx: BotContext) {
       buffer = fs.readFileSync(filePath);
     } else {
       const response = await fetch(
-        `http://localhost:8081/file/bot${config.botToken}/${filePath}`
+        `${config.telegramApiRoot}/file/bot${config.botToken}/${filePath}`
       );
       buffer = Buffer.from(await response.arrayBuffer());
     }

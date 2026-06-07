@@ -1,0 +1,70 @@
+# Optional VPN override — route ONLY qBittorrent traffic through WireGuard.
+# Usage: docker compose -f docker-compose.yml -f docker-compose.vpn.yml up -d
+#
+# Place your WireGuard client config at ./data/wireguard/wg0.conf
+# The VPN server should port-forward the torrent listen port (default 6891).
+#
+# Architecture:
+#   wireguard ←──network_mode──→ qbittorrent  (VPN tunnel)
+#       │
+#       └── internal network ──→ bot, telegram-bot-api (normal internet)
+#
+# Bot connects to qB via "wireguard:8080" and telegram-bot-api via "telegram-bot-api:8081"
+
+services:
+  wireguard:
+    image: linuxserver/wireguard:latest
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    sysctls:
+      - net.ipv4.conf.all.src_valid_mark=1
+      - net.ipv6.conf.all.disable_ipv6=1
+    environment:
+      - PUID=0
+      - PGID=0
+      - TZ=Asia/Taipei
+    volumes:
+      - ./data/wireguard:/config
+    ports:
+      - "6891:6891"
+      - "6891:6891/udp"
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD", "wg", "show", "wg0"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  qbittorrent:
+    network_mode: "service:wireguard"
+    depends_on:
+      wireguard:
+        condition: service_healthy
+    ports: !reset []
+
+  telegram-bot-api:
+    network_mode: !reset ""
+    depends_on:
+      - qbittorrent
+    networks:
+      - internal
+    ports:
+      - "8081:8081"
+
+  bot:
+    network_mode: !reset ""
+    depends_on:
+      - qbittorrent
+      - telegram-bot-api
+    networks:
+      - internal
+    environment:
+      - QB_HOST=wireguard
+      - TELEGRAM_API_ROOT=http://telegram-bot-api:8081
+
+networks:
+  internal:
+    driver: bridge

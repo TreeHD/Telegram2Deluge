@@ -25,7 +25,7 @@ export interface Services {
 export function createBot(services: Services) {
   const bot = new Bot<BotContext>(config.botToken, {
     client: {
-      apiRoot: "http://localhost:8081",
+      apiRoot: config.telegramApiRoot,
     },
   });
 

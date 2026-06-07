@@ -14,6 +14,7 @@ export const config = {
   botToken: required("BOT_TOKEN"),
   telegramApiId: required("TELEGRAM_API_ID"),
   telegramApiHash: required("TELEGRAM_API_HASH"),
+  telegramApiRoot: optional("TELEGRAM_API_ROOT", "http://localhost:8081"),
   allowedUserIds: required("ALLOWED_USER_IDS")
     .split(",")
     .map((id) => parseInt(id.trim(), 10)),
