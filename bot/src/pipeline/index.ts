@@ -9,6 +9,7 @@ import { isVideoFile } from "./utils.js";
 import { QBClient } from "../qb/client.js";
 import { withRetry } from "../utils/retry.js";
 import { escapeHtml, escapeHref } from "../utils/html.js";
+import { generateM3u8 } from "../utils/m3u8.js";
 import {
   addPipelineJob,
   updateJobStatus,
@@ -84,12 +85,6 @@ export class Pipeline {
 
       const uploadChatId = config.uploadChatId || job.chat_id;
 
-      await this.editStatus(
-        job.chat_id,
-        job.message_id,
-        `${job.name}\n\n上傳到 Telegram 中... (0/${outputFiles.length})`
-      );
-
       const fileLinks: string[] = [];
       for (let i = 0; i < outputFiles.length; i++) {
         const file = outputFiles[i];
@@ -99,39 +94,37 @@ export class Pipeline {
         const displayName = truncateFilename(filename, 60);
         fileLinks.push(`<a href="${escapeHref(link)}">${escapeHtml(displayName)}</a>`);
 
-        await this.editStatus(
-          job.chat_id,
-          job.message_id,
-          `${job.name}\n\n上傳到 Telegram 中... (${i + 1}/${outputFiles.length})`
-        );
+        const done = i === outputFiles.length - 1;
+        const keyboard = new InlineKeyboard()
+          .text("上傳 R2", `r2_yes:${job.id}`)
+          .text("上傳 Filebin", `fb_yes:${job.id}`)
+          .row()
+          .text(done ? "🗑️ 刪除原始檔" : "🔒 上傳中...", done ? `del:${job.id}` : `noop:${job.id}`);
+
+        const header = `${escapeHtml(truncateFilename(job.name, 100))}\n\n`;
+        const progress = done ? "" : `\n\n⏳ 上傳中... (${i + 1}/${outputFiles.length})`;
+        const footer = done ? `\n\n選擇後續動作：` : progress;
+        const chunks = splitLinksIntoChunks(fileLinks, 4000 - header.length - footer.length);
+
+        const firstText = header + chunks[0] + footer;
+        await withRetry(async () => {
+          await this.api.editMessageText(job.chat_id, job.message_id, firstText, {
+            parse_mode: "HTML",
+            link_preview_options: { is_disabled: true },
+            reply_markup: keyboard,
+          });
+        }, "pipeline:progressEdit");
       }
 
       addPendingAction(job.id, job.chat_id, outputFiles, downloadPath);
 
-      const keyboard = new InlineKeyboard()
-        .text("上傳 R2", `r2_yes:${job.id}`)
-        .text("上傳 Filebin", `fb_yes:${job.id}`)
-        .row()
-        .text("刪除原始檔", `del:${job.id}`);
-
+      // Overflow chunks (if links exceed 4000 chars)
       const header = `${escapeHtml(truncateFilename(job.name, 100))}\n\n`;
       const footer = `\n\n選擇後續動作：`;
-      const chunks = splitLinksIntoChunks(fileLinks, 4000 - header.length - footer.length);
-
-      // First chunk: edit the original message
-      const firstText = header + chunks[0] + footer;
-      await withRetry(async () => {
-        await this.api.editMessageText(job.chat_id, job.message_id, firstText, {
-          parse_mode: "HTML",
-          link_preview_options: { is_disabled: true },
-          reply_markup: keyboard,
-        });
-      }, "pipeline:finalEdit");
-
-      // Remaining chunks: send as new messages in the thread
-      for (let i = 1; i < chunks.length; i++) {
+      const allChunks = splitLinksIntoChunks(fileLinks, 4000 - header.length - footer.length);
+      for (let i = 1; i < allChunks.length; i++) {
         await withRetry(async () => {
-          await this.api.sendMessage(job.chat_id, chunks[i], {
+          await this.api.sendMessage(job.chat_id, allChunks[i], {
             parse_mode: "HTML",
             link_preview_options: { is_disabled: true },
             reply_to_message_id: job.message_id,
@@ -166,6 +159,7 @@ export class Pipeline {
 
     const files: string[] = JSON.parse(pending.files);
     const urls: string[] = [];
+    const videoEntries: Array<{ filename: string; url: string }> = [];
 
     for (const file of files) {
       const filename = path.basename(file);
@@ -173,6 +167,18 @@ export class Pipeline {
       await uploadToR2(file, r2Key);
       const url = await getPresignedUrl(r2Key);
       urls.push(`<a href="${escapeHref(url)}">${escapeHtml(filename)}</a>`);
+      videoEntries.push({ filename, url });
+    }
+
+    const m3u8Content = generateM3u8(videoEntries);
+    if (m3u8Content) {
+      const m3u8Key = `${jobId}/playlist.m3u8`;
+      const m3u8Path = path.join(config.paths.processing, `${jobId}-playlist.m3u8`);
+      fs.writeFileSync(m3u8Path, m3u8Content);
+      await uploadToR2(m3u8Path, m3u8Key);
+      const m3u8Url = await getPresignedUrl(m3u8Key);
+      urls.push(`<a href="${escapeHref(m3u8Url)}">📋 playlist.m3u8</a>`);
+      try { fs.unlinkSync(m3u8Path); } catch {}
     }
 
     this.cleanupProcessing(files);
@@ -189,14 +195,27 @@ export class Pipeline {
     const binId = `tg-${jobId}`;
     const links: string[] = [];
     const skipped: string[] = [];
+    const videoEntries: Array<{ filename: string; url: string }> = [];
 
     for (const file of files) {
       const result = await uploadToFilebin(file, binId);
       if (result) {
         links.push(`<a href="${escapeHref(result.url)}">${escapeHtml(result.filename)}</a>`);
+        videoEntries.push({ filename: result.filename, url: result.url });
       } else {
         skipped.push(path.basename(file));
       }
+    }
+
+    const m3u8Content = generateM3u8(videoEntries);
+    if (m3u8Content) {
+      const m3u8Path = path.join(config.paths.processing, `${jobId}-playlist.m3u8`);
+      fs.writeFileSync(m3u8Path, m3u8Content);
+      const result = await uploadToFilebin(m3u8Path, binId);
+      if (result) {
+        links.push(`<a href="${escapeHref(result.url)}">📋 playlist.m3u8</a>`);
+      }
+      try { fs.unlinkSync(m3u8Path); } catch {}
     }
 
     return { links, skipped, binUrl: getFilebinBinUrl(binId) };

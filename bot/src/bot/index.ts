@@ -109,6 +109,8 @@ export function createBot(services: Services) {
           link_preview_options: { is_disabled: true },
           reply_markup: keyboard,
         });
+      } else if (data.startsWith("noop:")) {
+        await ctx.answerCallbackQuery({ text: "上傳中，請稍候..." });
       } else if (data.startsWith("del:")) {
         const jobId = data.slice(4);
         await ctx.pipeline.deleteJobAndTorrent(jobId, ctx.qb);
