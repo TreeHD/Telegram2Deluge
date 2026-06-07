@@ -1,0 +1,24 @@
+# WireGuard Client Configuration Example
+# Copy this file to ./data/wireguard/wg0.conf and fill in your values.
+#
+# Your VPN server MUST port-forward the torrent listen port (default 6891 TCP+UDP)
+# to this client's VPN IP address.
+
+[Interface]
+PrivateKey = YOUR_CLIENT_PRIVATE_KEY_HERE
+Address = 10.0.0.2/32
+DNS = 1.1.1.1, 8.8.8.8
+
+# Kill switch: drop traffic if VPN goes down
+PostUp = iptables -I OUTPUT ! -o %i -m mark ! --mark $(wg show %i fwmark) -m addrtype ! --dst-type LOCAL -j REJECT
+PreDown = iptables -D OUTPUT ! -o %i -m mark ! --mark $(wg show %i fwmark) -m addrtype ! --dst-type LOCAL -j REJECT
+
+[Peer]
+PublicKey = YOUR_SERVER_PUBLIC_KEY_HERE
+
+# Optional: pre-shared key for extra security
+# PresharedKey = YOUR_PRESHARED_KEY_HERE
+
+Endpoint = your-vpn-server.com:51820
+AllowedIPs = 0.0.0.0/0
+PersistentKeepalive = 25
