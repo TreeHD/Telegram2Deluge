@@ -85,46 +85,44 @@ export class Pipeline {
 
       const uploadChatId = config.uploadChatId || job.chat_id;
 
+      await this.editStatus(job.chat_id, job.message_id, `${job.name}\n\n上傳到 Telegram 中...`);
+
+      // Upload to TG sequentially (need message IDs for links)
       const fileLinks: string[] = [];
-      for (let i = 0; i < outputFiles.length; i++) {
-        const file = outputFiles[i];
+      for (const file of outputFiles) {
         const result = await uploadToTelegram(this.api, uploadChatId, file);
         const link = buildMessageLink(uploadChatId, result.messageId);
         const filename = path.basename(file);
         const displayName = truncateFilename(filename, 60);
         fileLinks.push(`<a href="${escapeHref(link)}">${escapeHtml(displayName)}</a>`);
-
-        const done = i === outputFiles.length - 1;
-        const keyboard = new InlineKeyboard()
-          .text("上傳 R2", `r2_yes:${job.id}`)
-          .text("上傳 Filebin", `fb_yes:${job.id}`)
-          .row()
-          .text(done ? "🗑️ 刪除原始檔" : "🔒 上傳中...", done ? `del:${job.id}` : `noop:${job.id}`);
-
-        const header = `${escapeHtml(truncateFilename(job.name, 100))}\n\n`;
-        const progress = done ? "" : `\n\n⏳ 上傳中... (${i + 1}/${outputFiles.length})`;
-        const footer = done ? `\n\n選擇後續動作：` : progress;
-        const chunks = splitLinksIntoChunks(fileLinks, 4000 - header.length - footer.length);
-
-        const firstText = header + chunks[0] + footer;
-        await withRetry(async () => {
-          await this.api.editMessageText(job.chat_id, job.message_id, firstText, {
-            parse_mode: "HTML",
-            link_preview_options: { is_disabled: true },
-            reply_markup: keyboard,
-          });
-        }, "pipeline:progressEdit");
       }
 
       addPendingAction(job.id, job.chat_id, outputFiles, downloadPath);
 
-      // Overflow chunks (if links exceed 4000 chars)
+      // Send a new message with file links + action buttons
+      const keyboard = new InlineKeyboard()
+        .text("上傳 R2", `r2_yes:${job.id}`)
+        .text("上傳 Filebin", `fb_yes:${job.id}`)
+        .row()
+        .text("🗑️ 刪除原始檔", `del:${job.id}`);
+
       const header = `${escapeHtml(truncateFilename(job.name, 100))}\n\n`;
       const footer = `\n\n選擇後續動作：`;
-      const allChunks = splitLinksIntoChunks(fileLinks, 4000 - header.length - footer.length);
-      for (let i = 1; i < allChunks.length; i++) {
+      const chunks = splitLinksIntoChunks(fileLinks, 4000 - header.length - footer.length);
+
+      const firstText = header + chunks[0] + footer;
+      await withRetry(async () => {
+        await this.api.sendMessage(job.chat_id, firstText, {
+          parse_mode: "HTML",
+          link_preview_options: { is_disabled: true },
+          reply_markup: keyboard,
+          reply_to_message_id: job.message_id,
+        } as any);
+      }, "pipeline:resultMessage");
+
+      for (let i = 1; i < chunks.length; i++) {
         await withRetry(async () => {
-          await this.api.sendMessage(job.chat_id, allChunks[i], {
+          await this.api.sendMessage(job.chat_id, chunks[i], {
             parse_mode: "HTML",
             link_preview_options: { is_disabled: true },
             reply_to_message_id: job.message_id,
@@ -153,24 +151,25 @@ export class Pipeline {
     });
   }
 
-  async uploadToR2ForJob(jobId: string, chatId: number, messageId: number): Promise<string[]> {
+  async uploadToR2ForJob(jobId: string): Promise<string[]> {
     const pending = getPendingAction(jobId);
     if (!pending) return [];
 
     const files: string[] = JSON.parse(pending.files);
-    const urls: string[] = [];
-    const videoEntries: Array<{ filename: string; url: string }> = [];
 
-    for (const file of files) {
+    const results = await parallelMap(files, async (file) => {
       const filename = path.basename(file);
       const r2Key = `${jobId}/${filename}`;
       await uploadToR2(file, r2Key);
       const url = await getPresignedUrl(r2Key);
-      urls.push(`<a href="${escapeHref(url)}">${escapeHtml(filename)}</a>`);
-      videoEntries.push({ filename, url });
-    }
+      return { filename, url };
+    }, 6);
 
-    const m3u8Content = generateM3u8(videoEntries);
+    const urls: string[] = results.map((r) =>
+      `<a href="${escapeHref(r.url)}">${escapeHtml(r.filename)}</a>`
+    );
+
+    const m3u8Content = generateM3u8(results);
     if (m3u8Content) {
       const m3u8Key = `${jobId}/playlist.m3u8`;
       const m3u8Path = path.join(config.paths.processing, `${jobId}-playlist.m3u8`);
@@ -193,12 +192,17 @@ export class Pipeline {
 
     const files: string[] = JSON.parse(pending.files);
     const binId = `tg-${jobId}`;
+
+    const results = await parallelMap(files, async (file) => {
+      const result = await uploadToFilebin(file, binId);
+      return { file, result };
+    }, 6);
+
     const links: string[] = [];
     const skipped: string[] = [];
     const videoEntries: Array<{ filename: string; url: string }> = [];
 
-    for (const file of files) {
-      const result = await uploadToFilebin(file, binId);
+    for (const { file, result } of results) {
       if (result) {
         links.push(`<a href="${escapeHref(result.url)}">${escapeHtml(result.filename)}</a>`);
         videoEntries.push({ filename: result.filename, url: result.url });
@@ -357,4 +361,20 @@ function splitLinksIntoChunks(links: string[], firstChunkMax: number): string[] 
   }
 
   return chunks.length > 0 ? chunks : [""];
+}
+
+async function parallelMap<T, R>(items: T[], fn: (item: T) => Promise<R>, concurrency: number): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let idx = 0;
+
+  async function worker() {
+    while (idx < items.length) {
+      const i = idx++;
+      results[i] = await fn(items[i]);
+    }
+  }
+
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, () => worker());
+  await Promise.all(workers);
+  return results;
 }

@@ -10,6 +10,7 @@ import { handleStatus } from "./handlers/status.js";
 import { handleDisk } from "./handlers/disk.js";
 import { handleList } from "./handlers/list.js";
 import { escapeHtml } from "../utils/html.js";
+import { withRetry } from "../utils/retry.js";
 
 export interface BotContext extends Context {
   qb: QBClient;
@@ -61,54 +62,52 @@ export function createBot(services: Services) {
 
   bot.on("callback_query:data", async (ctx) => {
     const data = ctx.callbackQuery.data;
+    const chatId = ctx.callbackQuery.message!.chat.id;
 
     try {
       if (data.startsWith("r2_yes:")) {
         const jobId = data.slice(7);
-        const chatId = ctx.callbackQuery.message!.chat.id;
-        const messageId = ctx.callbackQuery.message!.message_id;
-        await ctx.answerCallbackQuery({ text: "開始上傳到 R2..." });
-        await ctx.editMessageText("上傳到 R2 中...");
+        await ctx.answerCallbackQuery({ text: "開始上傳到 R2，完成後會通知你" });
 
-        const urls = await ctx.pipeline.uploadToR2ForJob(jobId, chatId, messageId);
-        if (urls.length > 0) {
-          const urlList = urls.join("\n");
-          await ctx.editMessageText(`R2 下載連結 (24hr):\n${urlList}`, {
-            parse_mode: "HTML",
-            link_preview_options: { is_disabled: true },
-          });
-        } else {
-          await ctx.editMessageText("找不到待上傳的檔案。");
-        }
-      } else if (data.startsWith("r2_no:")) {
-        const jobId = data.slice(6);
-        await ctx.answerCallbackQuery({ text: "已跳過 R2 上傳" });
-        await ctx.editMessageText("已完成，未上傳到 R2。");
-        ctx.pipeline.removePendingR2(jobId);
+        // Fire and forget — don't block the bot
+        runInBackground(async () => {
+          const urls = await ctx.pipeline.uploadToR2ForJob(jobId);
+          if (urls.length > 0) {
+            const urlList = urls.join("\n");
+            await sendMessage(bot.api, chatId, `R2 下載連結 (24hr):\n${urlList}`);
+          } else {
+            await sendMessage(bot.api, chatId, "找不到待上傳的檔案。");
+          }
+        }, "r2_upload");
+
       } else if (data.startsWith("fb_yes:")) {
         const jobId = data.slice(7);
-        await ctx.answerCallbackQuery({ text: "開始上傳到 Filebin..." });
-        await ctx.editMessageText("上傳到 Filebin 中...");
+        await ctx.answerCallbackQuery({ text: "開始上傳到 Filebin，完成後會通知你" });
 
-        const { links, skipped, binUrl } = await ctx.pipeline.uploadToFilebinForJob(jobId);
-        let text = "";
-        if (links.length > 0) {
-          text += `Filebin 下載連結:\n${links.join("\n")}`;
-          text += `\n\n📁 <a href="${escapeHtml(binUrl)}">開啟 Bin</a>`;
-        }
-        if (skipped.length > 0) {
-          text += `\n\n⚠️ 被拒絕的檔案: ${skipped.map(f => escapeHtml(f)).join(", ")}`;
-        }
-        if (!text) {
-          text = "沒有檔案可上傳。";
-        }
+        runInBackground(async () => {
+          const { links, skipped, binUrl } = await ctx.pipeline.uploadToFilebinForJob(jobId);
+          let text = "";
+          if (links.length > 0) {
+            text += `Filebin 下載連結:\n${links.join("\n")}`;
+            text += `\n\n📁 <a href="${escapeHtml(binUrl)}">開啟 Bin</a>`;
+          }
+          if (skipped.length > 0) {
+            text += `\n\n⚠️ 被拒絕的檔案: ${skipped.map(f => escapeHtml(f)).join(", ")}`;
+          }
+          if (!text) {
+            text = "沒有檔案可上傳。";
+          }
 
-        const keyboard = new InlineKeyboard().text("🗑️ 刪除原始檔", `del:${jobId}`);
-        await ctx.editMessageText(text, {
-          parse_mode: "HTML",
-          link_preview_options: { is_disabled: true },
-          reply_markup: keyboard,
-        });
+          const keyboard = new InlineKeyboard().text("🗑️ 刪除原始檔", `del:${jobId}`);
+          await withRetry(async () => {
+            await bot.api.sendMessage(chatId, text, {
+              parse_mode: "HTML",
+              link_preview_options: { is_disabled: true },
+              reply_markup: keyboard,
+            } as any);
+          }, "fb_result");
+        }, "filebin_upload");
+
       } else if (data.startsWith("noop:")) {
         await ctx.answerCallbackQuery({ text: "上傳中，請稍候..." });
       } else if (data.startsWith("del:")) {
@@ -138,13 +137,6 @@ export function createBot(services: Services) {
       try {
         await ctx.answerCallbackQuery({ text: "操作失敗，請查看 log" });
       } catch {}
-      try {
-        const chatId = ctx.callbackQuery.message?.chat.id;
-        const msgId = ctx.callbackQuery.message?.message_id;
-        if (chatId && msgId) {
-          await ctx.api.editMessageText(chatId, msgId, `操作失敗: ${err}`);
-        }
-      } catch {}
     }
   });
 
@@ -165,4 +157,19 @@ export function createBot(services: Services) {
   });
 
   return bot;
+}
+
+function runInBackground(fn: () => Promise<void>, label: string) {
+  fn().catch((err) => {
+    logger.error(err, `Background task failed: ${label}`);
+  });
+}
+
+async function sendMessage(api: any, chatId: number, text: string) {
+  await withRetry(async () => {
+    await api.sendMessage(chatId, text, {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+    });
+  }, "sendMessage");
 }
