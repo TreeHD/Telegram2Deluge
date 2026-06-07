@@ -3,75 +3,65 @@ import path from "node:path";
 import fs from "node:fs";
 import { config, logger } from "../config.js";
 
-export async function compressVideo(inputPath: string, targetSizeMb: number): Promise<string | null> {
+export async function splitVideo(inputPath: string, targetSizeMb: number): Promise<string[]> {
   const outputDir = config.paths.processing;
   fs.mkdirSync(outputDir, { recursive: true });
 
   const basename = path.basename(inputPath, path.extname(inputPath));
-  const outputPath = path.join(outputDir, `${basename}_compressed.mp4`);
+  const ext = path.extname(inputPath);
 
   const duration = await getVideoDuration(inputPath);
   if (!duration || duration <= 0) {
-    logger.warn({ inputPath }, "Cannot determine video duration");
-    return null;
+    logger.warn({ inputPath }, "Cannot determine video duration, returning as-is");
+    return [inputPath];
   }
 
-  const targetBits = targetSizeMb * 1024 * 1024 * 8;
-  const audioBitrate = 128000;
-  const videoBitrate = Math.floor((targetBits / duration) - audioBitrate);
+  const fileSize = fs.statSync(inputPath).size;
+  const targetBytes = targetSizeMb * 1024 * 1024;
+  const numParts = Math.ceil(fileSize / targetBytes);
+  const segmentDuration = Math.floor(duration / numParts);
 
-  if (videoBitrate < 500000) {
-    logger.warn({ inputPath, videoBitrate }, "Target bitrate too low, skipping compression");
-    return null;
+  if (segmentDuration < 10) {
+    logger.warn({ inputPath, segmentDuration }, "Segment duration too short");
+    return [inputPath];
   }
 
-  const passLogFile = path.join(outputDir, `${basename}_passlog`);
+  const outputPattern = path.join(outputDir, `${basename}.part%03d${ext}`);
 
   try {
-    // Pass 1
     await runFfmpeg([
       "-y", "-i", inputPath,
-      "-c:v", "libx264", "-b:v", `${videoBitrate}`,
-      "-preset", config.ffmpeg.preset,
-      "-pass", "1", "-passlogfile", passLogFile,
-      "-an", "-f", "null", "/dev/null",
+      "-c", "copy",
+      "-map", "0",
+      "-f", "segment",
+      "-segment_time", `${segmentDuration}`,
+      "-reset_timestamps", "1",
+      outputPattern,
     ]);
 
-    // Pass 2
-    await runFfmpeg([
-      "-y", "-i", inputPath,
-      "-c:v", "libx264", "-b:v", `${videoBitrate}`,
-      "-preset", config.ffmpeg.preset,
-      "-pass", "2", "-passlogfile", passLogFile,
-      "-c:a", "aac", "-b:a", "128k",
-      outputPath,
-    ]);
-
-    const outputSize = fs.statSync(outputPath).size / 1024 / 1024;
-    if (outputSize > targetSizeMb) {
-      logger.warn({ outputSize, targetSizeMb }, "Compressed video still too large");
-      fs.unlinkSync(outputPath);
-      return null;
-    }
-
-    // Clean passlog files
-    for (const f of fs.readdirSync(outputDir)) {
-      if (f.startsWith(`${basename}_passlog`)) {
-        fs.unlinkSync(path.join(outputDir, f));
+    const parts: string[] = [];
+    const files = fs.readdirSync(outputDir).sort();
+    for (const f of files) {
+      if (f.startsWith(`${basename}.part`) && f.endsWith(ext)) {
+        parts.push(path.join(outputDir, f));
       }
     }
 
-    logger.info({ inputPath, outputPath, outputSize: `${outputSize.toFixed(0)}MB` }, "Video compressed");
-    return outputPath;
+    if (parts.length === 0) {
+      logger.error({ inputPath }, "FFmpeg segment produced no output");
+      return [inputPath];
+    }
+
+    logger.info({ inputPath, parts: parts.length, segmentDuration }, "Video split into segments");
+    return parts;
   } catch (err) {
-    logger.error(err, "FFmpeg compression failed");
-    if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
-    return null;
+    logger.error(err, "FFmpeg segment failed");
+    return [inputPath];
   }
 }
 
 function getVideoDuration(filePath: string): Promise<number> {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
     const proc = spawn("ffprobe", [
       "-v", "quiet",
       "-print_format", "json",

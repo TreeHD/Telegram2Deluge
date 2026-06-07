@@ -1,7 +1,7 @@
 import { Api, InlineKeyboard } from "grammy";
 import { config, logger } from "../config.js";
 import { splitToZip } from "./zipper.js";
-import { compressVideo } from "./ffmpeg.js";
+import { splitVideo } from "./ffmpeg.js";
 import { uploadToR2, getPresignedUrl } from "../storage/r2.js";
 import { uploadToTelegram, buildMessageLink } from "../storage/telegram.js";
 import { isVideoFile } from "./utils.js";
@@ -262,13 +262,8 @@ export class Pipeline {
       if (sizeMb <= targetSize) {
         outputFiles.push(filePath);
       } else if (isVideoFile(filePath)) {
-        const compressed = await compressVideo(filePath, targetSize);
-        if (compressed) {
-          outputFiles.push(compressed);
-        } else {
-          const parts = await splitToZip(filePath, targetSize);
-          outputFiles.push(...parts);
-        }
+        const parts = await splitVideo(filePath, targetSize);
+        outputFiles.push(...parts);
       } else {
         const parts = await splitToZip(filePath, targetSize);
         outputFiles.push(...parts);
