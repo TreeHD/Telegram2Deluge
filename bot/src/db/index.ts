@@ -38,6 +38,17 @@ db.exec(`
     download_path TEXT NOT NULL,
     created_at INTEGER DEFAULT (unixepoch())
   );
+
+  CREATE TABLE IF NOT EXISTS stream_files (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id TEXT NOT NULL,
+    filename TEXT NOT NULL,
+    file_id TEXT NOT NULL,
+    file_size INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER DEFAULT (unixepoch())
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_stream_files_job ON stream_files(job_id);
 `);
 
 // Migration: add message_id column if missing
@@ -106,6 +117,21 @@ export function removePendingAction(jobId: string) {
 
 export function getJobById(jobId: string): { id: string; torrent_id: string; chat_id: number; message_id: number; name: string } | undefined {
   return db.prepare("SELECT id, torrent_id, chat_id, message_id, name FROM pipeline_jobs WHERE id = ?").get(jobId) as any;
+}
+
+// Stream files
+export function addStreamFile(jobId: string, filename: string, fileId: string, fileSize: number) {
+  db.prepare(
+    "INSERT INTO stream_files (job_id, filename, file_id, file_size) VALUES (?, ?, ?, ?)"
+  ).run(jobId, filename, fileId, fileSize);
+}
+
+export function getStreamFiles(jobId: string): Array<{ filename: string; file_id: string; file_size: number }> {
+  return db.prepare("SELECT filename, file_id, file_size FROM stream_files WHERE job_id = ?").all(jobId) as any;
+}
+
+export function getStreamFile(jobId: string, filename: string): { filename: string; file_id: string; file_size: number } | undefined {
+  return db.prepare("SELECT filename, file_id, file_size FROM stream_files WHERE job_id = ? AND filename = ?").get(jobId, filename) as any;
 }
 
 export { db };

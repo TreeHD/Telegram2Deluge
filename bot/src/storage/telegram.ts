@@ -8,6 +8,7 @@ import { withRetry } from "../utils/retry.js";
 export interface UploadResult {
   messageId: number;
   chatId: number;
+  fileId: string;
 }
 
 export async function uploadToTelegram(
@@ -41,8 +42,16 @@ export async function uploadToTelegram(
     }
   }, `uploadToTelegram:${filename}`);
 
-  logger.info({ filename, messageId: msg.message_id }, "Uploaded to Telegram");
-  return { messageId: msg.message_id, chatId };
+  let fileId = "";
+  const m = msg as any;
+  if (m.video) {
+    fileId = m.video.file_id;
+  } else if (m.document) {
+    fileId = m.document.file_id;
+  }
+
+  logger.info({ filename, messageId: msg.message_id, fileId }, "Uploaded to Telegram");
+  return { messageId: msg.message_id, chatId, fileId };
 }
 
 // Build a t.me link for a message in a private supergroup/channel.

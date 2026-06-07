@@ -12,6 +12,7 @@ import { handleList } from "./handlers/list.js";
 import { escapeHtml } from "../utils/html.js";
 import { withRetry } from "../utils/retry.js";
 import { getJobById } from "../db/index.js";
+import { getStreamLinksForJob, generateStreamM3u8, getStreamUrlForFile } from "../stream/index.js";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -111,6 +112,40 @@ export function createBot(services: Services) {
           }, "fb_result");
         }, "filebin_upload");
 
+      } else if (data.startsWith("st_yes:")) {
+        const jobId = data.slice(7);
+        await ctx.answerCallbackQuery({ text: "產生直鏈中..." });
+
+        runInBackground(async () => {
+          const links = getStreamLinksForJob(jobId);
+          if (links.length === 0) {
+            await sendMessage(bot.api, chatId, "找不到待串流的檔案。");
+            return;
+          }
+
+          const fileLinks = links.map((url) => {
+            const filename = decodeURIComponent(url.split("/").pop()!.split("?")[0]);
+            return `<a href="${escapeHtml(url)}">${escapeHtml(filename)}</a>`;
+          });
+
+          let text = `Stream 直鏈:\n${fileLinks.join("\n")}`;
+
+          const m3u8 = generateStreamM3u8(jobId);
+          if (m3u8) {
+            const m3u8Url = getStreamUrlForFile(jobId, "playlist.m3u8");
+            text += `\n\n<a href="${escapeHtml(m3u8Url)}">📋 playlist.m3u8</a>`;
+          }
+
+          const keyboard = new InlineKeyboard().text("🗑️ 刪除原始檔", `del:${jobId}`);
+          await withRetry(async () => {
+            await bot.api.sendMessage(chatId, text, {
+              parse_mode: "HTML",
+              link_preview_options: { is_disabled: true },
+              reply_markup: keyboard,
+            } as any);
+          }, "stream_result");
+        }, "stream_links");
+
       } else if (data.startsWith("noop:")) {
         await ctx.answerCallbackQuery({ text: "上傳中，請稍候..." });
       } else if (data.startsWith("del:")) {
@@ -173,9 +208,11 @@ export function createBot(services: Services) {
           const fileList = existingFiles.map((f) => `• ${escapeHtml(path.basename(f))}`).slice(0, 20);
           const keyboard = new InlineKeyboard()
             .text("上傳 R2", `r2_yes:${jobId}`)
-            .text("上傳 Filebin", `fb_yes:${jobId}`)
-            .row()
-            .text("🗑️ 刪除原始檔", `del:${jobId}`);
+            .text("上傳 Filebin", `fb_yes:${jobId}`);
+          if (config.streamHost) {
+            keyboard.text("Stream 直鏈", `st_yes:${jobId}`);
+          }
+          keyboard.row().text("🗑️ 刪除原始檔", `del:${jobId}`);
           const text =
             `<b>${escapeHtml(name.slice(0, 100))}</b>\n\n` +
             `檔案 (${existingFiles.length}):\n${fileList.join("\n")}` +

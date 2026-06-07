@@ -14,6 +14,7 @@ services:
       - "8080:8080"
       - "6891:6891"
       - "6891:6891/udp"
+      - "8082:8082"
 
   telegram-bot-api:
     image: aiogram/telegram-bot-api:latest

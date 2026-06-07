@@ -18,6 +18,7 @@ import {
   getPendingAction,
   removePendingAction,
   getJobById,
+  addStreamFile,
 } from "../db/index.js";
 import path from "node:path";
 import fs from "node:fs";
@@ -95,6 +96,11 @@ export class Pipeline {
         const filename = path.basename(file);
         const displayName = truncateFilename(filename, 60);
         fileLinks.push(`<a href="${escapeHref(link)}">${escapeHtml(displayName)}</a>`);
+
+        if (result.fileId) {
+          const fileSize = fs.statSync(file).size;
+          addStreamFile(job.id, filename, result.fileId, fileSize);
+        }
       }
 
       addPendingAction(job.id, job.chat_id, outputFiles, downloadPath);
@@ -102,9 +108,11 @@ export class Pipeline {
       // Send a new message with file links + action buttons
       const keyboard = new InlineKeyboard()
         .text("上傳 R2", `r2_yes:${job.id}`)
-        .text("上傳 Filebin", `fb_yes:${job.id}`)
-        .row()
-        .text("🗑️ 刪除原始檔", `del:${job.id}`);
+        .text("上傳 Filebin", `fb_yes:${job.id}`);
+      if (config.streamHost) {
+        keyboard.text("Stream 直鏈", `st_yes:${job.id}`);
+      }
+      keyboard.row().text("🗑️ 刪除原始檔", `del:${job.id}`);
 
       const header = `${escapeHtml(truncateFilename(job.name, 100))}\n\n`;
       const footer = `\n\n選擇後續動作：`;
