@@ -1,6 +1,4 @@
-FROM golang:1.23-alpine AS builder
-
-RUN apk add --no-cache gcc musl-dev
+FROM golang:latest AS builder
 
 WORKDIR /build
 
@@ -11,9 +9,9 @@ COPY internal/ ./internal/
 RUN go mod tidy
 RUN CGO_ENABLED=1 go build -o /build/tg-stream .
 
-FROM alpine:3.20
+FROM debian:bookworm-slim
 
-RUN apk add --no-cache ca-certificates
+RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 COPY --from=builder /build/tg-stream .
