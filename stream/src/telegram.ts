@@ -19,5 +19,16 @@ export async function resolveFile(fileId: string): Promise<TgFileInfo | null> {
 }
 
 export function getFileUrl(filePath: string): string {
-  return `${TELEGRAM_API_ROOT}/file/bot${BOT_TOKEN}/${filePath}`;
+  // Local Bot API returns absolute paths like /var/lib/telegram-bot-api/<token>/videos/file_1
+  // The HTTP /file/ endpoint needs the relative part after the token directory
+  let relativePath = filePath;
+  if (filePath.startsWith("/")) {
+    const parts = filePath.split("/");
+    // Find the token segment (contains ":") and take everything after it
+    const tokenIdx = parts.findIndex((p) => p.includes(":"));
+    if (tokenIdx >= 0) {
+      relativePath = parts.slice(tokenIdx + 1).join("/");
+    }
+  }
+  return `${TELEGRAM_API_ROOT}/file/bot${BOT_TOKEN}/${relativePath}`;
 }
