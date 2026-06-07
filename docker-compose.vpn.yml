@@ -62,17 +62,17 @@ services:
       wireguard:
         condition: service_healthy
 
-  # Reverse proxy for Stream Server (bot container)
+  # Reverse proxy for Stream Server
   stream-proxy:
     image: alpine/socat:latest
     restart: unless-stopped
-    command: TCP-LISTEN:8082,fork,reuseaddr TCP:bot:8082
+    command: TCP-LISTEN:8082,fork,reuseaddr TCP:stream:8082
     ports:
       - "8082:8082"
     networks:
       - internal
     depends_on:
-      - bot
+      - stream
 
   telegram-bot-api:
     network_mode: !reset ""
@@ -92,6 +92,15 @@ services:
       - internal
     environment:
       - QB_HOST=wireguard
+      - TELEGRAM_API_ROOT=http://telegram-bot-api:8081
+
+  stream:
+    network_mode: !reset ""
+    depends_on:
+      - telegram-bot-api
+    networks:
+      - internal
+    environment:
       - TELEGRAM_API_ROOT=http://telegram-bot-api:8081
 
 networks:

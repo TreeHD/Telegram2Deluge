@@ -44,7 +44,6 @@ export const config = {
     downloads: optional("DOWNLOAD_DIR", "/downloads"),
     processing: optional("PROCESSING_DIR", "/processing"),
     queue: optional("QUEUE_DIR", "/data/queue"),
-    telegramData: optional("TELEGRAM_DATA_DIR", "/var/lib/telegram-bot-api"),
   },
 
   cleanup: {
@@ -60,7 +59,6 @@ export const config = {
     preset: optional("FFMPEG_PRESET", "medium"),
   },
 
-  streamPort: parseInt(optional("STREAM_PORT", "8082"), 10),
   streamHost: optional("STREAM_HOST", ""),
 } as const;
 

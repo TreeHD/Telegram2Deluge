@@ -2,7 +2,6 @@ import { getStreamFiles } from "../db/index.js";
 import { generateM3u8 } from "../utils/m3u8.js";
 import { getStreamUrlForFile } from "./urls.js";
 
-export { createStreamServer } from "./server.js";
 export { getStreamUrlForFile } from "./urls.js";
 
 export function getStreamLinksForJob(jobId: string): string[] {

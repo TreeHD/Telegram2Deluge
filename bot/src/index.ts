@@ -5,7 +5,6 @@ import { startTrackerUpdater } from "./qb/trackers.js";
 import { DownloadMonitor } from "./monitor/index.js";
 import { Pipeline } from "./pipeline/index.js";
 import { startCleanupScheduler } from "./cleanup/index.js";
-import { createStreamServer } from "./stream/index.js";
 import fs from "node:fs";
 
 process.on("unhandledRejection", (err) => {
@@ -52,10 +51,6 @@ async function main() {
 
   monitor.start();
   logger.info("Download monitor started");
-
-  if (config.streamHost) {
-    createStreamServer(config.streamPort);
-  }
 
   await bot.start({
     onStart: () => logger.info("Bot started"),

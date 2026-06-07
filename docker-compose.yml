@@ -43,4 +43,19 @@ services:
       - ./data/downloads:/downloads
       - ./data/processing:/processing
       - ./data/queue:/data/queue
-      - ./data/telegram-bot-api:/var/lib/telegram-bot-api
+
+  stream:
+    build: ./stream
+    restart: unless-stopped
+    network_mode: "service:qbittorrent"
+    depends_on:
+      - telegram-bot-api
+    environment:
+      - BOT_TOKEN=${BOT_TOKEN}
+      - TELEGRAM_API_ROOT=http://localhost:8081
+      - STREAM_HOST=${STREAM_HOST}
+      - STREAM_PORT=8082
+      - STREAM_SECRET=${STREAM_SECRET}
+      - DB_PATH=/data/queue/state.db
+    volumes:
+      - ./data/queue:/data/queue

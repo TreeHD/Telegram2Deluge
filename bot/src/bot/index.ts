@@ -11,7 +11,7 @@ import { handleDisk } from "./handlers/disk.js";
 import { handleList } from "./handlers/list.js";
 import { escapeHtml } from "../utils/html.js";
 import { withRetry } from "../utils/retry.js";
-import { getJobById } from "../db/index.js";
+import { getJobById, removeTrackedTorrent } from "../db/index.js";
 import { getStreamLinksForJob, generateStreamM3u8, getStreamUrlForFile } from "../stream/index.js";
 import fs from "node:fs";
 import path from "node:path";
@@ -192,8 +192,9 @@ export function createBot(services: Services) {
             });
           }, "info:torrent");
         } else {
+          removeTrackedTorrent(hash);
           await withRetry(async () => {
-            await bot.api.sendMessage(chatId, "找不到此下載任務，可能已完成或被刪除。");
+            await bot.api.sendMessage(chatId, "找不到此下載任務，已從列表移除。");
           }, "info:notfound");
         }
       } else if (data.startsWith("info_job:")) {
@@ -225,8 +226,9 @@ export function createBot(services: Services) {
             } as any);
           }, "info_job");
         } else {
+          ctx.pipeline.removePendingR2(jobId);
           await withRetry(async () => {
-            await bot.api.sendMessage(chatId, "此任務已過期或被刪除。");
+            await bot.api.sendMessage(chatId, "此任務已過期或被刪除，已從列表移除。");
           }, "info_job:notfound");
         }
       }
