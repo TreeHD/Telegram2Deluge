@@ -96,6 +96,10 @@ export function getPendingAction(jobId: string): { job_id: string; chat_id: numb
   return db.prepare("SELECT * FROM pending_actions WHERE job_id = ?").get(jobId) as any;
 }
 
+export function getAllPendingActions(): Array<{ job_id: string; chat_id: number; files: string; download_path: string }> {
+  return db.prepare("SELECT * FROM pending_actions").all() as any;
+}
+
 export function removePendingAction(jobId: string) {
   db.prepare("DELETE FROM pending_actions WHERE job_id = ?").run(jobId);
 }
