@@ -37,19 +37,34 @@ func main() {
 	}
 	defer database.Close()
 
-	log.Println("Connecting to Telegram...")
-	client, err = gotgproto.NewClient(
-		int(cfg.ApiID),
-		cfg.ApiHash,
-		gotgproto.ClientTypeBot(cfg.BotToken),
-		&gotgproto.ClientOpts{
-			Session:          sessionMaker.SqlSession(sqlite.Open("stream.session")),
-			DisableCopyright: true,
-		},
-	)
-	if err != nil {
-		log.Fatalf("Failed to start Telegram client: %v", err)
+	log.Printf("Connecting to Telegram (apiID=%d)...", cfg.ApiID)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		var clientErr error
+		client, clientErr = gotgproto.NewClient(
+			int(cfg.ApiID),
+			cfg.ApiHash,
+			gotgproto.ClientTypeBot(cfg.BotToken),
+			&gotgproto.ClientOpts{
+				Session:          sessionMaker.SqlSession(sqlite.Open("/data/queue/stream.session")),
+				DisableCopyright: true,
+			},
+		)
+		done <- clientErr
+	}()
+
+	select {
+	case err = <-done:
+		if err != nil {
+			log.Fatalf("Failed to start Telegram client: %v", err)
+		}
+	case <-ctx.Done():
+		log.Fatalf("Timeout connecting to Telegram (120s)")
 	}
+
 	log.Printf("Telegram client started as @%s", client.Self.Username)
 
 	mux := http.NewServeMux()
