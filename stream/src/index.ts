@@ -117,6 +117,7 @@ const server = http.createServer(async (req, res) => {
   const fileSize = tgFile.fileSize || streamFile.file_size;
   const mimeType = getMimeType(filename);
   const fileUrl = getFileUrl(tgFile.filePath);
+  console.log(`[stream] Proxying: file_id=${streamFile.file_id} filePath=${tgFile.filePath} fileUrl=${fileUrl}`);
 
   // Proxy the request to telegram-bot-api /file/ endpoint
   const proxyHeaders: Record<string, string> = {};
@@ -128,6 +129,8 @@ const server = http.createServer(async (req, res) => {
     const upstream = await fetch(fileUrl, { headers: proxyHeaders });
 
     if (!upstream.ok && upstream.status !== 206) {
+      const body = await upstream.text();
+      console.error(`[stream] Upstream error: status=${upstream.status} body=${body}`);
       res.writeHead(502);
       res.end("Upstream Error");
       return;
