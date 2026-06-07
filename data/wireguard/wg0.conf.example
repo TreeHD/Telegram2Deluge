@@ -9,10 +9,6 @@ PrivateKey = YOUR_CLIENT_PRIVATE_KEY_HERE
 Address = 10.0.0.2/32
 DNS = 1.1.1.1, 8.8.8.8
 
-# Kill switch: drop traffic if VPN goes down
-PostUp = iptables -I OUTPUT ! -o %i -m mark ! --mark $(wg show %i fwmark) -m addrtype ! --dst-type LOCAL -j REJECT
-PreDown = iptables -D OUTPUT ! -o %i -m mark ! --mark $(wg show %i fwmark) -m addrtype ! --dst-type LOCAL -j REJECT
-
 [Peer]
 PublicKey = YOUR_SERVER_PUBLIC_KEY_HERE
 

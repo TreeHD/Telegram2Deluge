@@ -7,9 +7,10 @@
 # Architecture:
 #   wireguard ←──network_mode──→ qbittorrent  (VPN tunnel)
 #       │
-#       └── internal network ──→ bot, telegram-bot-api (normal internet)
+#       └── internal network ──→ bot, telegram-bot-api, qb-proxy (normal internet)
 #
 # Bot connects to qB via "wireguard:8080" and telegram-bot-api via "telegram-bot-api:8081"
+# External access to qB WebUI via qb-proxy on port 8080
 
 services:
   wireguard:
@@ -28,7 +29,6 @@ services:
     volumes:
       - ./data/wireguard:/config
     ports:
-      - "8080:8080"
       - "6891:6891"
       - "6891:6891/udp"
     networks:
@@ -45,6 +45,19 @@ services:
       wireguard:
         condition: service_healthy
     ports: !reset []
+
+  # Reverse proxy for qB WebUI (because wireguard container can't route responses to external clients)
+  qb-proxy:
+    image: alpine/socat:latest
+    restart: unless-stopped
+    command: TCP-LISTEN:8080,fork,reuseaddr TCP:wireguard:8080
+    ports:
+      - "8080:8080"
+    networks:
+      - internal
+    depends_on:
+      wireguard:
+        condition: service_healthy
 
   telegram-bot-api:
     network_mode: !reset ""
