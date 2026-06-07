@@ -32,14 +32,25 @@ async function resolveFileLocalPath(fileId: string): Promise<string | null> {
   const url = `${config.telegramApiRoot}/bot${config.botToken}/getFile?file_id=${encodeURIComponent(fileId)}`;
   try {
     const res = await fetch(url);
-    if (!res.ok) return null;
+    if (!res.ok) {
+      logger.warn({ fileId, status: res.status }, "getFile failed");
+      return null;
+    }
     const data = (await res.json()) as any;
-    if (!data.ok || !data.result?.file_path) return null;
-    // Local Bot API: file_path is relative, full path is under telegram-bot-api data dir
-    const filePath = path.join(config.paths.telegramData, data.result.file_path);
+    if (!data.ok || !data.result?.file_path) {
+      logger.warn({ fileId, data }, "getFile returned no file_path");
+      return null;
+    }
+    // Local Bot API returns absolute path; remote returns relative
+    const filePath = data.result.file_path.startsWith("/")
+      ? data.result.file_path
+      : path.join(config.paths.telegramData, data.result.file_path);
+    logger.info({ fileId, filePath }, "Resolved stream file path");
     if (fs.existsSync(filePath)) return filePath;
+    logger.warn({ filePath }, "Resolved path does not exist on disk");
     return null;
-  } catch {
+  } catch (err) {
+    logger.error(err, "resolveFileLocalPath error");
     return null;
   }
 }
