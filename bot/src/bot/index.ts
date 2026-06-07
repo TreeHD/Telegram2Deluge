@@ -83,6 +83,30 @@ export function createBot(services: Services) {
         await ctx.answerCallbackQuery({ text: "已跳過 R2 上傳" });
         await ctx.editMessageText("已完成，未上傳到 R2。");
         ctx.pipeline.removePendingR2(jobId);
+      } else if (data.startsWith("fb_yes:")) {
+        const jobId = data.slice(7);
+        await ctx.answerCallbackQuery({ text: "開始上傳到 Filebin..." });
+        await ctx.editMessageText("上傳到 Filebin 中...");
+
+        const { links, skipped, binUrl } = await ctx.pipeline.uploadToFilebinForJob(jobId);
+        let text = "";
+        if (links.length > 0) {
+          text += `Filebin 下載連結:\n${links.join("\n")}`;
+          text += `\n\n📁 <a href="${escapeHtml(binUrl)}">開啟 Bin</a>`;
+        }
+        if (skipped.length > 0) {
+          text += `\n\n⚠️ 被拒絕的檔案: ${skipped.map(f => escapeHtml(f)).join(", ")}`;
+        }
+        if (!text) {
+          text = "沒有檔案可上傳。";
+        }
+
+        const keyboard = new InlineKeyboard().text("🗑️ 刪除原始檔", `del:${jobId}`);
+        await ctx.editMessageText(text, {
+          parse_mode: "HTML",
+          link_preview_options: { is_disabled: true },
+          reply_markup: keyboard,
+        });
       } else if (data.startsWith("del:")) {
         const jobId = data.slice(4);
         await ctx.pipeline.deleteJobAndTorrent(jobId, ctx.qb);

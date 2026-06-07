@@ -3,6 +3,7 @@ import { config, logger } from "../config.js";
 import { splitToZip } from "./zipper.js";
 import { splitVideo } from "./ffmpeg.js";
 import { uploadToR2, getPresignedUrl } from "../storage/r2.js";
+import { uploadToFilebin, getFilebinBinUrl } from "../storage/filebin.js";
 import { uploadToTelegram, buildMessageLink } from "../storage/telegram.js";
 import { isVideoFile } from "./utils.js";
 import { QBClient } from "../qb/client.js";
@@ -108,8 +109,8 @@ export class Pipeline {
       addPendingAction(job.id, job.chat_id, outputFiles, downloadPath);
 
       const keyboard = new InlineKeyboard()
-        .text("上傳到 R2", `r2_yes:${job.id}`)
-        .text("不用了", `r2_no:${job.id}`)
+        .text("上傳 R2", `r2_yes:${job.id}`)
+        .text("上傳 Filebin", `fb_yes:${job.id}`)
         .row()
         .text("刪除原始檔", `del:${job.id}`);
 
@@ -178,6 +179,27 @@ export class Pipeline {
     this.deleteDownload(pending.download_path);
     removePendingAction(jobId);
     return urls;
+  }
+
+  async uploadToFilebinForJob(jobId: string): Promise<{ links: string[]; skipped: string[]; binUrl: string }> {
+    const pending = getPendingAction(jobId);
+    if (!pending) return { links: [], skipped: [], binUrl: "" };
+
+    const files: string[] = JSON.parse(pending.files);
+    const binId = `tg-${jobId}`;
+    const links: string[] = [];
+    const skipped: string[] = [];
+
+    for (const file of files) {
+      const result = await uploadToFilebin(file, binId);
+      if (result) {
+        links.push(`<a href="${escapeHref(result.url)}">${escapeHtml(result.filename)}</a>`);
+      } else {
+        skipped.push(path.basename(file));
+      }
+    }
+
+    return { links, skipped, binUrl: getFilebinBinUrl(binId) };
   }
 
   getPendingR2(jobId: string) {
