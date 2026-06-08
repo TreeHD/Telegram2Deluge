@@ -88,10 +88,14 @@ export class Pipeline {
 
       await this.editStatus(job.chat_id, job.message_id, `${job.name}\n\n上傳到 Telegram 中...`);
 
-      // Upload to TG sequentially (need message IDs for links)
-      const fileLinks: string[] = [];
-      for (const file of outputFiles) {
+      // Upload to TG with 4 concurrent threads, results stay in order
+      const uploadResults = await parallelMap(outputFiles, async (file) => {
         const result = await uploadToTelegram(this.api, uploadChatId, file);
+        return { file, result };
+      }, 4);
+
+      const fileLinks: string[] = [];
+      for (const { file, result } of uploadResults) {
         const link = buildMessageLink(uploadChatId, result.messageId);
         const filename = path.basename(file);
         const displayName = truncateFilename(filename, 60);
