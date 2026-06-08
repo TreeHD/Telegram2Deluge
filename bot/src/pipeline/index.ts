@@ -68,6 +68,10 @@ export class Pipeline {
     this.processNext();
   }
 
+  retrigger() {
+    this.processNext();
+  }
+
   private async processNext() {
     if (this.processing) return;
 

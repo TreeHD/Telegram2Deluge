@@ -173,6 +173,7 @@ export function createBot(services: Services) {
       } else if (data.startsWith("retry:")) {
         const jobId = data.slice(6);
         updateJobStatus(jobId, "pending");
+        ctx.pipeline.retrigger();
         await ctx.answerCallbackQuery({ text: "已重新排入處理佇列" });
         try {
           await ctx.deleteMessage();
