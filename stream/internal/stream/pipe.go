@@ -10,7 +10,10 @@ import (
 	"github.com/gotd/td/tg"
 )
 
-const defaultBlockSize = 1024 * 1024 // 1MB
+const (
+	defaultBlockSize = 1024 * 1024      // 1MB
+	firstBlockSize   = 256 * 1024       // 256KB for fast TTFB
+)
 
 type Pipe struct {
 	ctx    context.Context
@@ -21,7 +24,6 @@ type Pipe struct {
 	start    int64
 	end      int64
 
-	blockSize  int64
 	blockQueue chan []byte
 
 	currentBlock []byte
@@ -47,7 +49,6 @@ func NewPipe(ctx context.Context, client *gotgproto.Client, location tg.InputFil
 		location:   location,
 		start:      start,
 		end:        end,
-		blockSize:  defaultBlockSize,
 		totalBytes: totalBytes,
 		blockQueue: make(chan []byte, 8),
 	}
@@ -93,47 +94,44 @@ func (p *Pipe) Close() error {
 func (p *Pipe) prefetch() {
 	defer close(p.blockQueue)
 
-	alignedStart := p.start - (p.start % p.blockSize)
-	leftTrim := p.start - alignedStart
-	rightTrim := (p.end % p.blockSize) + 1
-	totalBlocks := int((p.end - alignedStart + p.blockSize) / p.blockSize)
+	sent := int64(0)
+	offset := p.start - (p.start % firstBlockSize)
+	skipBytes := p.start - offset
 
-	offset := alignedStart
-
-	for blockNum := 0; blockNum < totalBlocks; blockNum++ {
+	isFirst := true
+	for sent < p.totalBytes {
 		select {
 		case <-p.ctx.Done():
 			return
 		default:
 		}
 
-		data, err := p.downloadBlock(offset)
+		blockSize := defaultBlockSize
+		if isFirst {
+			blockSize = firstBlockSize
+			isFirst = false
+		}
+
+		data, err := p.downloadBlockSize(offset, int64(blockSize))
 		if err != nil {
-			if p.ctx.Err() != nil {
-				return
-			}
 			return
 		}
 
-		dataLen := int64(len(data))
+		// Skip leading bytes on first block (alignment)
+		if skipBytes > 0 {
+			if skipBytes >= int64(len(data)) {
+				offset += int64(blockSize)
+				skipBytes -= int64(len(data))
+				continue
+			}
+			data = data[skipBytes:]
+			skipBytes = 0
+		}
 
-		if totalBlocks == 1 {
-			if dataLen < rightTrim {
-				rightTrim = dataLen
-			}
-			if leftTrim > dataLen {
-				leftTrim = dataLen
-			}
-			data = data[leftTrim:rightTrim]
-		} else if blockNum == 0 {
-			if leftTrim > dataLen {
-				leftTrim = dataLen
-			}
-			data = data[leftTrim:]
-		} else if blockNum == totalBlocks-1 {
-			if dataLen > rightTrim {
-				data = data[:rightTrim]
-			}
+		// Trim trailing bytes if we'd overshoot
+		remaining := p.totalBytes - sent
+		if int64(len(data)) > remaining {
+			data = data[:remaining]
 		}
 
 		select {
@@ -142,14 +140,15 @@ func (p *Pipe) prefetch() {
 			return
 		}
 
-		offset += p.blockSize
+		sent += int64(len(data))
+		offset += int64(blockSize)
 	}
 }
 
-func (p *Pipe) downloadBlock(offset int64) ([]byte, error) {
+func (p *Pipe) downloadBlockSize(offset, blockSize int64) ([]byte, error) {
 	res, err := p.client.API().UploadGetFile(p.ctx, &tg.UploadGetFileRequest{
 		Offset:   offset,
-		Limit:    int(p.blockSize),
+		Limit:    int(blockSize),
 		Location: p.location,
 	})
 	if err != nil {
