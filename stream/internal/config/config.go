@@ -10,7 +10,6 @@ type Config struct {
 	ApiHash     string
 	BotToken    string
 	StreamPort  int
-	StreamHost  string
 	Secret      string
 	SessionPath string
 }
@@ -24,7 +23,6 @@ func Load() *Config {
 		ApiHash:     getEnv("TELEGRAM_API_HASH", ""),
 		BotToken:    getEnv("BOT_TOKEN", ""),
 		StreamPort:  port,
-		StreamHost:  getEnv("STREAM_HOST", ""),
 		Secret:      getEnv("STREAM_SECRET", "change-me"),
 		SessionPath: getEnv("SESSION_PATH", "/data/stream.session"),
 	}
