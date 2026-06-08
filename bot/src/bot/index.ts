@@ -124,7 +124,7 @@ export function createBot(services: Services) {
           }
 
           const fileLinks = files.map((f) => {
-            const url = generateStreamUrl(f.chat_id, f.message_id, f.filename);
+            const url = generateStreamUrl(f.message_id, f.filename);
             return `<a href="${escapeHtml(url)}">${escapeHtml(f.filename)}</a>`;
           });
 
@@ -136,7 +136,7 @@ export function createBot(services: Services) {
           if (videos.length > 1) {
             const m3u8Lines = ["#EXTM3U"];
             for (const v of videos) {
-              const url = generateStreamUrl(v.chat_id, v.message_id, v.filename);
+              const url = generateStreamUrl(v.message_id, v.filename);
               m3u8Lines.push(`#EXTINF:-1,${v.filename}`);
               m3u8Lines.push(url);
             }

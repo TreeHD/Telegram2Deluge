@@ -7,12 +7,12 @@ import (
 	"fmt"
 )
 
-func GenerateHash(secret string, chatID int64, messageID int, filename string) string {
+func GenerateHash(secret string, messageID int, filename string) string {
 	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write([]byte(fmt.Sprintf("%d:%d:%s", chatID, messageID, filename)))
+	mac.Write([]byte(fmt.Sprintf("%d:%s", messageID, filename)))
 	return hex.EncodeToString(mac.Sum(nil))[:16]
 }
 
-func VerifyHash(secret string, chatID int64, messageID int, filename, hash string) bool {
-	return hash == GenerateHash(secret, chatID, messageID, filename)
+func VerifyHash(secret string, messageID int, filename, hash string) bool {
+	return hash == GenerateHash(secret, messageID, filename)
 }

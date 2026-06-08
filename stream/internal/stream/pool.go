@@ -61,47 +61,85 @@ func NewWorkerPool(cfg *config.Config, count int) (*WorkerPool, error) {
 	}
 
 	// Pre-resolve peers by loading dialogs on the first worker
-	pool.resolveDialogs()
+	if cfg.UploadChat != 0 {
+		pool.resolveChannel(cfg.UploadChat)
+	}
 
 	return pool, nil
 }
 
-func (p *WorkerPool) resolveDialogs() {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+func (p *WorkerPool) resolveChannel(chatID int64) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
 	client := p.workers[0].Client
-	res, err := client.API().MessagesGetDialogs(ctx, &tg.MessagesGetDialogsRequest{
-		OffsetPeer: &tg.InputPeerEmpty{},
-		Limit:      100,
+
+	// Strip -100 prefix
+	channelID := chatID
+	if channelID < 0 {
+		s := fmt.Sprintf("%d", -channelID)
+		if len(s) > 3 && s[:3] == "100" {
+			fmt.Sscanf(s[3:], "%d", &channelID)
+		}
+	}
+
+	// First check peer storage
+	peer := client.PeerStorage.GetInputPeerById(chatID)
+	switch p := peer.(type) {
+	case *tg.InputPeerChannel:
+		if p.AccessHash != 0 {
+			setAccessHash(channelID, p.AccessHash)
+			log.Printf("[pool] Resolved channel %d from peer storage (hash=%d)", channelID, p.AccessHash)
+			return
+		}
+	}
+
+	// Try getHistory with access_hash=0 — works for bots that are channel members
+	inputPeer := &tg.InputPeerChannel{ChannelID: channelID, AccessHash: 0}
+	res, err := client.API().MessagesGetHistory(ctx, &tg.MessagesGetHistoryRequest{
+		Peer:  inputPeer,
+		Limit: 1,
 	})
 	if err != nil {
-		log.Printf("[pool] Failed to load dialogs: %v", err)
+		log.Printf("[pool] Failed to resolve channel %d via getHistory: %v", channelID, err)
+		log.Printf("[pool] Trying getFullChannel...")
+
+		// Fallback: try getFullChannel
+		inputChannel := &tg.InputChannel{ChannelID: channelID, AccessHash: 0}
+		fullRes, err2 := client.API().ChannelsGetFullChannel(ctx, inputChannel)
+		if err2 != nil {
+			log.Printf("[pool] Failed to resolve channel %d: %v", channelID, err2)
+			return
+		}
+		for _, chat := range fullRes.Chats {
+			if ch, ok := chat.(*tg.Channel); ok && ch.ID == channelID {
+				setAccessHash(channelID, ch.AccessHash)
+				log.Printf("[pool] Resolved channel %d via getFullChannel (hash=%d)", channelID, ch.AccessHash)
+				return
+			}
+		}
 		return
 	}
 
-	switch d := res.(type) {
-	case *tg.MessagesDialogs:
-		for _, chat := range d.Chats {
-			if ch, ok := chat.(*tg.Channel); ok {
-				setAccessHash(ch.ID, ch.AccessHash)
-				log.Printf("[pool] Cached channel: %d (%s)", ch.ID, ch.Title)
-			}
-		}
-	case *tg.MessagesDialogsSlice:
-		for _, chat := range d.Chats {
-			if ch, ok := chat.(*tg.Channel); ok {
-				setAccessHash(ch.ID, ch.AccessHash)
-				log.Printf("[pool] Cached channel: %d (%s)", ch.ID, ch.Title)
+	// Extract access hash from chats in the response
+	switch msgs := res.(type) {
+	case *tg.MessagesChannelMessages:
+		for _, chat := range msgs.Chats {
+			if ch, ok := chat.(*tg.Channel); ok && ch.ID == channelID {
+				setAccessHash(channelID, ch.AccessHash)
+				log.Printf("[pool] Resolved channel %d via getHistory (hash=%d)", channelID, ch.AccessHash)
+				return
 			}
 		}
 	}
+
+	log.Printf("[pool] Could not find access hash for channel %d in response", channelID)
 }
 
-func (p *WorkerPool) Next() *gotgproto.Client {
+func (p *WorkerPool) Next() (*gotgproto.Client, int) {
 	idx := atomic.AddUint64(&p.index, 1)
-	worker := p.workers[idx%uint64(len(p.workers))]
-	return worker.Client
+	i := idx % uint64(len(p.workers))
+	return p.workers[i].Client, int(i)
 }
 
 func (p *WorkerPool) Size() int {

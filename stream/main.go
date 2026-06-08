@@ -48,7 +48,7 @@ func main() {
 	}
 }
 
-// URL format: /stream/{chat_id}/{message_id}/{filename}?hash=xxx
+// URL format: /stream/{message_id}/{filename}?hash=xxx
 func handleStream(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "GET" && r.Method != "HEAD" {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
@@ -56,26 +56,21 @@ func handleStream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	trimmed := strings.TrimPrefix(r.URL.Path, "/stream/")
-	parts := strings.SplitN(trimmed, "/", 3)
-	if len(parts) < 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
+	parts := strings.SplitN(trimmed, "/", 2)
+	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
 		http.Error(w, "Not Found", http.StatusNotFound)
 		return
 	}
 
-	chatID, err := strconv.ParseInt(parts[0], 10, 64)
-	if err != nil {
-		http.Error(w, "Invalid chat_id", http.StatusBadRequest)
-		return
-	}
-	messageID, err := strconv.Atoi(parts[1])
+	messageID, err := strconv.Atoi(parts[0])
 	if err != nil {
 		http.Error(w, "Invalid message_id", http.StatusBadRequest)
 		return
 	}
-	filename, _ := url.PathUnescape(parts[2])
+	filename, _ := url.PathUnescape(parts[1])
 	hash := r.URL.Query().Get("hash")
 
-	if !stream.VerifyHash(cfg.Secret, chatID, messageID, filename, hash) {
+	if !stream.VerifyHash(cfg.Secret, messageID, filename, hash) {
 		http.Error(w, "Forbidden", http.StatusForbidden)
 		return
 	}
@@ -84,8 +79,8 @@ func handleStream(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
-	worker := pool.Next()
-	location, fileSize, err := stream.ResolveFileLocation(ctx, worker, chatID, messageID)
+	worker, workerID := pool.Next()
+	location, fileSize, err := stream.ResolveFileLocation(ctx, worker, cfg.UploadChat, messageID)
 	if err != nil {
 		log.Printf("[stream] Resolve error: chatID=%d msgID=%d err=%v", chatID, messageID, err)
 		http.Error(w, "File Not Available", http.StatusNotFound)
@@ -96,6 +91,7 @@ func handleStream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Accept-Ranges", "bytes")
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`inline; filename="%s"`, url.PathEscape(filename)))
 	w.Header().Set("Content-Type", mimeType)
+	w.Header().Set("X-Worker", strconv.Itoa(workerID))
 
 	var start, end int64
 

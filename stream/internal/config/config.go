@@ -13,12 +13,14 @@ type Config struct {
 	Secret      string
 	SessionPath string
 	Workers     int
+	UploadChat  int64
 }
 
 func Load() *Config {
 	apiID, _ := strconv.Atoi(getEnv("TELEGRAM_API_ID", "0"))
 	port, _ := strconv.Atoi(getEnv("STREAM_PORT", "8082"))
 	workers, _ := strconv.Atoi(getEnv("STREAM_WORKERS", "4"))
+	uploadChat, _ := strconv.ParseInt(getEnv("UPLOAD_CHAT_ID", "0"), 10, 64)
 
 	return &Config{
 		ApiID:       int32(apiID),
@@ -28,6 +30,7 @@ func Load() *Config {
 		Secret:      getEnv("STREAM_SECRET", "change-me"),
 		SessionPath: getEnv("SESSION_PATH", "/data/stream.session"),
 		Workers:     workers,
+		UploadChat:  uploadChat,
 	}
 }
 
