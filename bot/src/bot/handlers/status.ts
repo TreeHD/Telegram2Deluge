@@ -1,7 +1,7 @@
 import { InlineKeyboard } from "grammy";
 import { BotContext } from "../index.js";
 import { config, logger } from "../../config.js";
-import { getAllTrackedTorrents, getAllPendingActions, getJobById, getFailedJobs, getStreamFiles } from "../../db/index.js";
+import { getAllTrackedTorrents, getAllPendingActions, getAllActiveJobs, getJobById, getFailedJobs, getStreamFiles } from "../../db/index.js";
 import { escapeHtml } from "../../utils/html.js";
 import { generateStreamUrl } from "../../stream/index.js";
 import { withRetry } from "../../utils/retry.js";
@@ -12,6 +12,7 @@ export async function handleStatus(ctx: BotContext) {
   try {
     const tracked = getAllTrackedTorrents();
     const pendingActions = getAllPendingActions();
+    const activeJobs = getAllActiveJobs();
     const failedJobs = getFailedJobs();
     const torrents = await ctx.qb.getTorrents();
 
@@ -20,7 +21,7 @@ export async function handleStatus(ctx: BotContext) {
       t.progress < 1 || t.state === "error" || t.state === "missingFiles"
     );
 
-    if (activeTorrents.length === 0 && pendingActions.length === 0 && failedJobs.length === 0) {
+    if (activeTorrents.length === 0 && pendingActions.length === 0 && activeJobs.length === 0 && failedJobs.length === 0) {
       await ctx.reply("目前沒有任何下載或待處理任務。");
       return;
     }
@@ -43,6 +44,15 @@ export async function handleStatus(ctx: BotContext) {
         .text("ℹ️ 詳情", `info:${t.hash}`)
         .text("❌ 取消", `cancel:${t.hash}`)
         .row();
+    }
+
+    // Pipeline jobs (pending/processing)
+    for (const job of activeJobs) {
+      const statusLabel = job.status === "processing" ? "⚙️ 處理中" : "🕐 排隊中";
+      sections.push(
+        `<b>${escapeHtml(job.name.slice(0, 60))}</b>\n` +
+        `${statusLabel}`
+      );
     }
 
     // Pending actions (upload completed, waiting for user)
