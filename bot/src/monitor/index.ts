@@ -120,8 +120,15 @@ export class DownloadMonitor {
           await this.editMessage(info.chatId, info.messageId, text, keyboard);
         }
 
-        const doneStates = ["uploading", "pausedUP", "stalledUP", "queuedUP", "forcedUP"];
+        const doneStates = ["uploading", "pausedUP", "stalledUP", "queuedUP", "forcedUP", "stoppedUP", "completed"];
         if (torrent.progress >= 1 && doneStates.includes(torrent.state)) {
+          // Double-check: wait one more poll to confirm it's truly done
+          if (info.lastProgress < 100) {
+            info.lastProgress = 100;
+            info.lastUpdate = now;
+            updateTrackedProgress(hash, 100);
+            continue;
+          }
           this.tracked.delete(hash);
           removeTrackedTorrent(hash);
 

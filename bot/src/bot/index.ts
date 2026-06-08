@@ -10,8 +10,9 @@ import { handleStatus } from "./handlers/status.js";
 import { handleDisk } from "./handlers/disk.js";
 import { escapeHtml } from "../utils/html.js";
 import { withRetry } from "../utils/retry.js";
-import { getJobById, removeTrackedTorrent, getStreamFiles, updateJobStatus } from "../db/index.js";
+import { getJobById, removeTrackedTorrent, getStreamFiles, updateJobStatus, getPendingAction, addStreamFile } from "../db/index.js";
 import { generateStreamUrl } from "../stream/index.js";
+import { uploadToTelegram } from "../storage/telegram.js";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -118,7 +119,12 @@ export function createBot(services: Services) {
         runInBackground(async () => {
           const files = getStreamFiles(jobId);
           if (files.length === 0) {
-            await sendMessage(bot.api, chatId, "找不到待串流的檔案。");
+            const keyboard = new InlineKeyboard().text("📤 重新上傳", `reup:${jobId}`);
+            await withRetry(async () => {
+              await bot.api.sendMessage(chatId, "找不到已上傳的串流檔案，請先重新上傳。", {
+                reply_markup: keyboard,
+              } as any);
+            }, "st_no_files");
             return;
           }
 
@@ -171,6 +177,58 @@ export function createBot(services: Services) {
         try {
           await ctx.deleteMessage();
         } catch {}
+      } else if (data.startsWith("reup:")) {
+        const jobId = data.slice(5);
+        await ctx.answerCallbackQuery({ text: "重新上傳中..." });
+
+        runInBackground(async () => {
+          const pending = getPendingAction(jobId);
+          if (!pending) {
+            await sendMessage(bot.api, chatId, "找不到待上傳的檔案記錄。");
+            return;
+          }
+
+          const files: string[] = JSON.parse(pending.files);
+          const existingFiles = files.filter((f) => fs.existsSync(f));
+          if (existingFiles.length === 0) {
+            await sendMessage(bot.api, chatId, "原始檔案已不存在。");
+            return;
+          }
+
+          const uploadChatId = config.uploadChatId || chatId;
+          let uploaded = 0;
+          for (const file of existingFiles) {
+            try {
+              const result = await uploadToTelegram(bot.api, uploadChatId, file);
+              const filename = path.basename(file);
+              const fileSize = fs.statSync(file).size;
+              addStreamFile(jobId, filename, result.fileId, fileSize, uploadChatId, result.messageId);
+              uploaded++;
+            } catch (err) {
+              logger.error(err, `Failed to re-upload ${path.basename(file)}`);
+            }
+          }
+
+          if (uploaded > 0) {
+            const streamFiles = getStreamFiles(jobId);
+            const fileLinks = streamFiles.map((f) => {
+              const url = generateStreamUrl(f.message_id, f.filename);
+              return `<a href="${escapeHtml(url)}">${escapeHtml(f.filename)}</a>`;
+            });
+
+            const keyboard = new InlineKeyboard().text("🗑️ 刪除原始檔", `del:${jobId}`);
+            await withRetry(async () => {
+              await bot.api.sendMessage(chatId, `Stream 直鏈 (${uploaded} 檔):\n${fileLinks.join("\n")}`, {
+                parse_mode: "HTML",
+                link_preview_options: { is_disabled: true },
+                reply_markup: keyboard,
+              } as any);
+            }, "reup_result");
+          } else {
+            await sendMessage(bot.api, chatId, "所有檔案上傳失敗，請查看 log。");
+          }
+        }, "reupload");
+
       } else if (data.startsWith("cancel:")) {
         const hash = data.slice(7);
         const tracked = ctx.monitor.getTracked(hash);

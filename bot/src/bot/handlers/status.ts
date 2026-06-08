@@ -15,7 +15,12 @@ export async function handleStatus(ctx: BotContext) {
     const failedJobs = getFailedJobs();
     const torrents = await ctx.qb.getTorrents();
 
-    if (torrents.length === 0 && pendingActions.length === 0 && failedJobs.length === 0) {
+    // Active downloads (exclude completed/seeding)
+    const activeTorrents = torrents.filter((t) =>
+      t.progress < 1 || t.state === "error" || t.state === "missingFiles"
+    );
+
+    if (activeTorrents.length === 0 && pendingActions.length === 0 && failedJobs.length === 0) {
       await ctx.reply("目前沒有任何下載或待處理任務。");
       return;
     }
@@ -23,8 +28,7 @@ export async function handleStatus(ctx: BotContext) {
     const sections: string[] = [];
     const keyboard = new InlineKeyboard();
 
-    // Active downloads
-    for (const t of torrents) {
+    for (const t of activeTorrents) {
       const speed = (t.dlspeed / 1024 / 1024).toFixed(2);
       const progress = (t.progress * 100).toFixed(1);
       const eta = t.eta > 0 && t.eta < 8640000 ? formatEta(t.eta) : "N/A";
@@ -60,6 +64,8 @@ export async function handleStatus(ctx: BotContext) {
       if (config.streamHost) {
         keyboard.text("Stream", `st_yes:${pending.job_id}`);
       }
+      keyboard.row();
+      keyboard.text("📤 重傳", `reup:${pending.job_id}`);
       keyboard.text("🗑️", `del:${pending.job_id}`);
       keyboard.row();
     }
@@ -83,6 +89,7 @@ export async function handleStatus(ctx: BotContext) {
       sections.push(text);
 
       keyboard.text("🔄 重試", `retry:${job.id}`);
+      keyboard.text("📤 重傳", `reup:${job.id}`);
       if (config.streamHost && streamFiles.length > 0) {
         keyboard.text("Stream", `st_yes:${job.id}`);
       }
