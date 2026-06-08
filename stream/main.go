@@ -14,49 +14,25 @@ import (
 
 	"tg-stream/internal/config"
 	"tg-stream/internal/stream"
-
-	"github.com/celestix/gotgproto"
-	"github.com/celestix/gotgproto/sessionMaker"
-	"github.com/glebarez/sqlite"
 )
 
 var (
-	cfg    *config.Config
-	client *gotgproto.Client
+	cfg  *config.Config
+	pool *stream.WorkerPool
 )
 
 func main() {
 	cfg = config.Load()
 
-	log.Printf("Connecting to Telegram (apiID=%d)...", cfg.ApiID)
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-	defer cancel()
+	log.Printf("Starting %d workers (apiID=%d)...", cfg.Workers, cfg.ApiID)
 
-	done := make(chan error, 1)
-	go func() {
-		var err error
-		client, err = gotgproto.NewClient(
-			int(cfg.ApiID),
-			cfg.ApiHash,
-			gotgproto.ClientTypeBot(cfg.BotToken),
-			&gotgproto.ClientOpts{
-				Session:          sessionMaker.SqlSession(sqlite.Open(cfg.SessionPath)),
-				DisableCopyright: true,
-			},
-		)
-		done <- err
-	}()
-
-	select {
-	case err := <-done:
-		if err != nil {
-			log.Fatalf("Failed to start Telegram client: %v", err)
-		}
-	case <-ctx.Done():
-		log.Fatalf("Timeout connecting to Telegram (120s)")
+	var err error
+	pool, err = stream.NewWorkerPool(cfg, cfg.Workers)
+	if err != nil {
+		log.Fatalf("Failed to start worker pool: %v", err)
 	}
 
-	log.Printf("Telegram client started as @%s", client.Self.Username)
+	log.Printf("Worker pool ready (%d workers)", pool.Size())
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/stream/", handleStream)
@@ -108,7 +84,8 @@ func handleStream(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
-	location, fileSize, err := stream.ResolveFileLocation(ctx, client, chatID, messageID)
+	worker := pool.Next()
+	location, fileSize, err := stream.ResolveFileLocation(ctx, worker, chatID, messageID)
 	if err != nil {
 		log.Printf("[stream] Resolve error: chatID=%d msgID=%d err=%v", chatID, messageID, err)
 		http.Error(w, "File Not Available", http.StatusNotFound)
@@ -147,7 +124,7 @@ func handleStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pipe, err := stream.NewPipe(r.Context(), client, location, start, end)
+	pipe, err := stream.NewPipe(r.Context(), worker, location, start, end)
 	if err != nil {
 		log.Printf("[stream] Pipe error: %v", err)
 		return

@@ -22,6 +22,7 @@ services:
       - TELEGRAM_API_HASH=       # Telegram API Hash
       - STREAM_PORT=8082
       - STREAM_SECRET=           # Shared secret with bot for URL signing
+      - STREAM_WORKERS=4         # Number of MTProto workers (concurrent streams)
       - SESSION_PATH=/data/stream.session
     volumes:
       - stream-data:/data
