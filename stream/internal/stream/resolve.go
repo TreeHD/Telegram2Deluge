@@ -4,17 +4,14 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"tg-stream/internal/db"
 
 	"github.com/celestix/gotgproto"
 	"github.com/gotd/td/tg"
 )
 
-func ResolveFileLocation(ctx context.Context, client *gotgproto.Client, file *db.StreamFile) (tg.InputFileLocationClass, int64, error) {
-	// Get channel input peer from chat ID
-	chatID := file.ChatID
-	if chatID == 0 {
-		return nil, 0, fmt.Errorf("chat_id is 0")
+func ResolveFileLocation(ctx context.Context, client *gotgproto.Client, chatID int64, messageID int) (tg.InputFileLocationClass, int64, error) {
+	if chatID == 0 || messageID == 0 {
+		return nil, 0, fmt.Errorf("invalid chat_id=%d or message_id=%d", chatID, messageID)
 	}
 
 	// Strip -100 prefix for channel ID
@@ -22,8 +19,7 @@ func ResolveFileLocation(ctx context.Context, client *gotgproto.Client, file *db
 	if channelID < 0 {
 		s := fmt.Sprintf("%d", -channelID)
 		if len(s) > 3 && s[:3] == "100" {
-			s = s[3:]
-			fmt.Sscanf(s, "%d", &channelID)
+			fmt.Sscanf(s[3:], "%d", &channelID)
 		}
 	}
 
@@ -38,7 +34,7 @@ func ResolveFileLocation(ctx context.Context, client *gotgproto.Client, file *db
 		inputChannel.AccessHash = p.AccessHash
 	}
 
-	msgID := tg.InputMessageClass(&tg.InputMessageID{ID: file.MessageID})
+	msgID := tg.InputMessageClass(&tg.InputMessageID{ID: messageID})
 	res, err := client.API().ChannelsGetMessages(ctx, &tg.ChannelsGetMessagesRequest{
 		Channel: inputChannel,
 		ID:      []tg.InputMessageClass{msgID},
@@ -65,7 +61,7 @@ func ResolveFileLocation(ctx context.Context, client *gotgproto.Client, file *db
 		return nil, 0, err
 	}
 
-	log.Printf("[stream] Resolved: chatID=%d msgID=%d size=%d", chatID, file.MessageID, size)
+	log.Printf("[stream] Resolved: chatID=%d msgID=%d size=%d", chatID, messageID, size)
 	return location, size, nil
 }
 
@@ -81,8 +77,6 @@ func extractDocumentLocation(msg *tg.Message) (tg.InputFileLocationClass, int64,
 			return nil, 0, fmt.Errorf("document is empty")
 		}
 		return doc.AsInputDocumentFileLocation(), doc.Size, nil
-	case *tg.MessageMediaPhoto:
-		return nil, 0, fmt.Errorf("photo streaming not supported")
 	default:
 		return nil, 0, fmt.Errorf("unsupported media type: %T", media)
 	}

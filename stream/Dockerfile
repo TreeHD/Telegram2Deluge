@@ -2,12 +2,17 @@ FROM golang:latest AS builder
 
 WORKDIR /build
 
+# Deps layer (cached unless go.mod changes)
 COPY go.mod ./
 COPY main.go ./
 COPY internal/ ./internal/
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod tidy
 
-RUN go mod tidy
-RUN CGO_ENABLED=1 go build -o /build/tg-stream .
+# Build layer (cached unless source changes)
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=1 go build -o /build/tg-stream .
 
 FROM debian:bookworm-slim
 

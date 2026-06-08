@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"tg-stream/internal/config"
-	"tg-stream/internal/db"
 	"tg-stream/internal/stream"
 
 	"github.com/celestix/gotgproto"
@@ -22,20 +21,12 @@ import (
 )
 
 var (
-	cfg      *config.Config
-	database *db.DB
-	client   *gotgproto.Client
+	cfg    *config.Config
+	client *gotgproto.Client
 )
 
 func main() {
 	cfg = config.Load()
-
-	var err error
-	database, err = db.Open(cfg.DBPath)
-	if err != nil {
-		log.Fatalf("Failed to open database: %v", err)
-	}
-	defer database.Close()
 
 	log.Printf("Connecting to Telegram (apiID=%d)...", cfg.ApiID)
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
@@ -43,21 +34,21 @@ func main() {
 
 	done := make(chan error, 1)
 	go func() {
-		var clientErr error
-		client, clientErr = gotgproto.NewClient(
+		var err error
+		client, err = gotgproto.NewClient(
 			int(cfg.ApiID),
 			cfg.ApiHash,
 			gotgproto.ClientTypeBot(cfg.BotToken),
 			&gotgproto.ClientOpts{
-				Session:          sessionMaker.SqlSession(sqlite.Open("/data/queue/stream.session")),
+				Session:          sessionMaker.SqlSession(sqlite.Open(cfg.SessionPath)),
 				DisableCopyright: true,
 			},
 		)
-		done <- clientErr
+		done <- err
 	}()
 
 	select {
-	case err = <-done:
+	case err := <-done:
 		if err != nil {
 			log.Fatalf("Failed to start Telegram client: %v", err)
 		}
@@ -69,6 +60,10 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/stream/", handleStream)
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok"))
+	})
 
 	addr := fmt.Sprintf(":%d", cfg.StreamPort)
 	log.Printf("Stream server listening on %s", addr)
@@ -77,55 +72,47 @@ func main() {
 	}
 }
 
+// URL format: /stream/{chat_id}/{message_id}/{filename}?hash=xxx
 func handleStream(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "GET" && r.Method != "HEAD" {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	// Parse /stream/{jobId}/{filename}
 	trimmed := strings.TrimPrefix(r.URL.Path, "/stream/")
-	parts := strings.SplitN(trimmed, "/", 2)
-	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
+	parts := strings.SplitN(trimmed, "/", 3)
+	if len(parts) < 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
 		http.Error(w, "Not Found", http.StatusNotFound)
 		return
 	}
 
-	jobID := parts[0]
-	filename, _ := url.PathUnescape(parts[1])
+	chatID, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid chat_id", http.StatusBadRequest)
+		return
+	}
+	messageID, err := strconv.Atoi(parts[1])
+	if err != nil {
+		http.Error(w, "Invalid message_id", http.StatusBadRequest)
+		return
+	}
+	filename, _ := url.PathUnescape(parts[2])
 	hash := r.URL.Query().Get("hash")
 
-	if !stream.VerifyHash(cfg.Secret, jobID, filename, hash) {
+	if !stream.VerifyHash(cfg.Secret, chatID, messageID, filename, hash) {
 		http.Error(w, "Forbidden", http.StatusForbidden)
 		return
 	}
 
-	// Virtual m3u8
-	if filename == "playlist.m3u8" {
-		handleM3u8(w, r, jobID)
-		return
-	}
-
-	// Lookup file in DB
-	file, err := database.GetStreamFile(jobID, filename)
-	if err != nil {
-		http.Error(w, "File Not Found", http.StatusNotFound)
-		return
-	}
-
-	// Resolve from Telegram
+	// Resolve from Telegram via MTProto
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
-	location, fileSize, err := stream.ResolveFileLocation(ctx, client, file)
+	location, fileSize, err := stream.ResolveFileLocation(ctx, client, chatID, messageID)
 	if err != nil {
-		log.Printf("[stream] Resolve error: %v", err)
+		log.Printf("[stream] Resolve error: chatID=%d msgID=%d err=%v", chatID, messageID, err)
 		http.Error(w, "File Not Available", http.StatusNotFound)
 		return
-	}
-
-	if fileSize == 0 {
-		fileSize = file.FileSize
 	}
 
 	mimeType := getMimeType(filename)
@@ -171,48 +158,6 @@ func handleStream(w http.ResponseWriter, r *http.Request) {
 	io.CopyN(w, pipe, contentLength)
 }
 
-func handleM3u8(w http.ResponseWriter, r *http.Request, jobID string) {
-	files, err := database.GetStreamFiles(jobID)
-	if err != nil || len(files) == 0 {
-		http.Error(w, "No playlist available", http.StatusNotFound)
-		return
-	}
-
-	videoExts := map[string]bool{
-		".mp4": true, ".mkv": true, ".m4v": true,
-		".ts": true, ".avi": true, ".mov": true, ".webm": true,
-	}
-
-	var videos []db.StreamFile
-	for _, f := range files {
-		ext := strings.ToLower(path.Ext(f.Filename))
-		if videoExts[ext] {
-			videos = append(videos, f)
-		}
-	}
-
-	if len(videos) <= 1 {
-		http.Error(w, "No playlist available", http.StatusNotFound)
-		return
-	}
-
-	var sb strings.Builder
-	sb.WriteString("#EXTM3U\n")
-	for _, v := range videos {
-		hash := stream.GenerateHash(cfg.Secret, jobID, v.Filename)
-		fileURL := fmt.Sprintf("%s/stream/%s/%s?hash=%s", cfg.StreamHost, jobID, url.PathEscape(v.Filename), hash)
-		sb.WriteString(fmt.Sprintf("#EXTINF:-1,%s\n", v.Filename))
-		sb.WriteString(fileURL + "\n")
-	}
-
-	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
-	w.Header().Set("Content-Disposition", `inline; filename="playlist.m3u8"`)
-	w.WriteHeader(http.StatusOK)
-	if r.Method != "HEAD" {
-		w.Write([]byte(sb.String()))
-	}
-}
-
 func parseRange(rangeHeader string, fileSize int64) []int64 {
 	if !strings.HasPrefix(rangeHeader, "bytes=") {
 		return nil
@@ -227,7 +172,6 @@ func parseRange(rangeHeader string, fileSize int64) []int64 {
 	var err error
 
 	if parts[0] == "" {
-		// suffix range: -500
 		end = fileSize - 1
 		suffix, err := strconv.ParseInt(parts[1], 10, 64)
 		if err != nil {

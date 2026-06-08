@@ -60,6 +60,7 @@ export const config = {
   },
 
   streamHost: optional("STREAM_HOST", ""),
+  streamApiKey: optional("STREAM_API_KEY", ""),
 } as const;
 
 export const logger = pino({

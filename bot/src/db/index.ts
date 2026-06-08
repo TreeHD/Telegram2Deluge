@@ -136,12 +136,12 @@ export function addStreamFile(jobId: string, filename: string, fileId: string, f
   ).run(jobId, filename, fileId, fileSize, chatId, messageId);
 }
 
-export function getStreamFiles(jobId: string): Array<{ filename: string; file_id: string; file_size: number }> {
-  return db.prepare("SELECT filename, file_id, file_size FROM stream_files WHERE job_id = ?").all(jobId) as any;
+export function getStreamFiles(jobId: string): Array<{ filename: string; file_id: string; file_size: number; chat_id: number; message_id: number }> {
+  return db.prepare("SELECT filename, file_id, file_size, chat_id, message_id FROM stream_files WHERE job_id = ?").all(jobId) as any;
 }
 
-export function getStreamFile(jobId: string, filename: string): { filename: string; file_id: string; file_size: number } | undefined {
-  return db.prepare("SELECT filename, file_id, file_size FROM stream_files WHERE job_id = ? AND filename = ?").get(jobId, filename) as any;
+export function getStreamFile(jobId: string, filename: string): { filename: string; file_id: string; file_size: number; chat_id: number; message_id: number } | undefined {
+  return db.prepare("SELECT filename, file_id, file_size, chat_id, message_id FROM stream_files WHERE job_id = ? AND filename = ?").get(jobId, filename) as any;
 }
 
 export { db };

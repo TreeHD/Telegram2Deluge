@@ -1,0 +1,44 @@
+# Standalone TG Stream Server
+# Stateless MTProto streaming proxy - no local file cache, no database.
+# All info (chat_id, message_id, filename) is encoded in the URL with HMAC verification.
+#
+# Usage: docker compose -f docker-compose.stream.yml up -d
+#
+# URL format: /stream/{chat_id}/{message_id}/{filename}?hash=xxx
+#
+# Cloudflare Tunnel (optional):
+#   Set CLOUDFLARED_TOKEN to enable tunnel. STREAM_HOST should be your tunnel domain.
+#   Leave CLOUDFLARED_TOKEN empty to expose port directly.
+
+services:
+  stream:
+    image: ghcr.io/treehd/telegram2deluge-stream:latest
+    restart: unless-stopped
+    ports:
+      - "${STREAM_PORT:-8082}:${STREAM_PORT:-8082}"
+    environment:
+      - BOT_TOKEN=               # Your Telegram bot token
+      - TELEGRAM_API_ID=         # Telegram API ID
+      - TELEGRAM_API_HASH=       # Telegram API Hash
+      - STREAM_HOST=             # Public URL e.g. http://your-ip:8082 or https://stream.yourdomain.com
+      - STREAM_PORT=8082
+      - STREAM_SECRET=           # Shared secret with bot for URL signing
+      - SESSION_PATH=/data/stream.session
+    volumes:
+      - stream-data:/data
+
+  # Optional: Cloudflare Tunnel for zero-config public access
+  # Set CLOUDFLARED_TOKEN in your env to enable
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARED_TOKEN:-}
+    depends_on:
+      - stream
+    profiles:
+      - tunnel
+
+volumes:
+  stream-data:

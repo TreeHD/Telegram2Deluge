@@ -11,8 +11,8 @@ import { handleDisk } from "./handlers/disk.js";
 import { handleList } from "./handlers/list.js";
 import { escapeHtml } from "../utils/html.js";
 import { withRetry } from "../utils/retry.js";
-import { getJobById, removeTrackedTorrent } from "../db/index.js";
-import { getStreamLinksForJob, generateStreamM3u8, getStreamUrlForFile } from "../stream/index.js";
+import { getJobById, removeTrackedTorrent, getStreamFiles } from "../db/index.js";
+import { generateStreamUrl } from "../stream/index.js";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -117,23 +117,33 @@ export function createBot(services: Services) {
         await ctx.answerCallbackQuery({ text: "產生直鏈中..." });
 
         runInBackground(async () => {
-          const links = getStreamLinksForJob(jobId);
-          if (links.length === 0) {
+          const files = getStreamFiles(jobId);
+          if (files.length === 0) {
             await sendMessage(bot.api, chatId, "找不到待串流的檔案。");
             return;
           }
 
-          const fileLinks = links.map((url) => {
-            const filename = decodeURIComponent(url.split("/").pop()!.split("?")[0]);
-            return `<a href="${escapeHtml(url)}">${escapeHtml(filename)}</a>`;
+          const fileLinks = files.map((f) => {
+            const url = generateStreamUrl(f.chat_id, f.message_id, f.filename);
+            return `<a href="${escapeHtml(url)}">${escapeHtml(f.filename)}</a>`;
           });
 
           let text = `Stream 直鏈:\n${fileLinks.join("\n")}`;
 
-          const m3u8 = generateStreamM3u8(jobId);
-          if (m3u8) {
-            const m3u8Url = getStreamUrlForFile(jobId, "playlist.m3u8");
-            text += `\n\n<a href="${escapeHtml(m3u8Url)}">📋 playlist.m3u8</a>`;
+          // m3u8 if multiple videos
+          const videoExts = new Set([".mp4", ".mkv", ".m4v", ".ts", ".avi", ".mov", ".webm"]);
+          const videos = files.filter((f) => videoExts.has(path.extname(f.filename).toLowerCase()));
+          if (videos.length > 1) {
+            const m3u8Lines = ["#EXTM3U"];
+            for (const v of videos) {
+              const url = generateStreamUrl(v.chat_id, v.message_id, v.filename);
+              m3u8Lines.push(`#EXTINF:-1,${v.filename}`);
+              m3u8Lines.push(url);
+            }
+            const m3u8Content = m3u8Lines.join("\n") + "\n";
+            const m3u8Buf = Buffer.from(m3u8Content, "utf-8");
+            const { InputFile } = await import("grammy");
+            await bot.api.sendDocument(chatId, new InputFile(m3u8Buf, "playlist.m3u8"));
           }
 
           const keyboard = new InlineKeyboard().text("🗑️ 刪除原始檔", `del:${jobId}`);
