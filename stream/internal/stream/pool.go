@@ -1,16 +1,18 @@
 package stream
 
 import (
+	"context"
 	"fmt"
 	"log"
-	"sync"
 	"sync/atomic"
+	"time"
 
 	"tg-stream/internal/config"
 
 	"github.com/celestix/gotgproto"
 	"github.com/celestix/gotgproto/sessionMaker"
 	"github.com/glebarez/sqlite"
+	"github.com/gotd/td/tg"
 )
 
 type Worker struct {
@@ -20,7 +22,6 @@ type Worker struct {
 type WorkerPool struct {
 	workers []*Worker
 	index   uint64
-	mu      sync.Mutex
 }
 
 func NewWorkerPool(cfg *config.Config, count int) (*WorkerPool, error) {
@@ -35,7 +36,7 @@ func NewWorkerPool(cfg *config.Config, count int) (*WorkerPool, error) {
 	for i := 0; i < count; i++ {
 		sessionPath := cfg.SessionPath
 		if i > 0 {
-			sessionPath = cfg.SessionPath + fmt.Sprintf(".%d", i)
+			sessionPath = fmt.Sprintf("%s.%d", cfg.SessionPath, i)
 		}
 
 		client, err := gotgproto.NewClient(
@@ -59,7 +60,42 @@ func NewWorkerPool(cfg *config.Config, count int) (*WorkerPool, error) {
 		log.Printf("[pool] Worker %d started as @%s", i, client.Self.Username)
 	}
 
+	// Pre-resolve peers by loading dialogs on the first worker
+	pool.resolveDialogs()
+
 	return pool, nil
+}
+
+func (p *WorkerPool) resolveDialogs() {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	client := p.workers[0].Client
+	res, err := client.API().MessagesGetDialogs(ctx, &tg.MessagesGetDialogsRequest{
+		OffsetPeer: &tg.InputPeerEmpty{},
+		Limit:      100,
+	})
+	if err != nil {
+		log.Printf("[pool] Failed to load dialogs: %v", err)
+		return
+	}
+
+	switch d := res.(type) {
+	case *tg.MessagesDialogs:
+		for _, chat := range d.Chats {
+			if ch, ok := chat.(*tg.Channel); ok {
+				setAccessHash(ch.ID, ch.AccessHash)
+				log.Printf("[pool] Cached channel: %d (%s)", ch.ID, ch.Title)
+			}
+		}
+	case *tg.MessagesDialogsSlice:
+		for _, chat := range d.Chats {
+			if ch, ok := chat.(*tg.Channel); ok {
+				setAccessHash(ch.ID, ch.AccessHash)
+				log.Printf("[pool] Cached channel: %d (%s)", ch.ID, ch.Title)
+			}
+		}
+	}
 }
 
 func (p *WorkerPool) Next() *gotgproto.Client {

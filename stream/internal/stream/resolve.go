@@ -4,10 +4,29 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sync"
 
 	"github.com/celestix/gotgproto"
 	"github.com/gotd/td/tg"
 )
+
+var (
+	accessHashCache = make(map[int64]int64)
+	accessHashMu    sync.RWMutex
+)
+
+func getAccessHash(channelID int64) (int64, bool) {
+	accessHashMu.RLock()
+	defer accessHashMu.RUnlock()
+	h, ok := accessHashCache[channelID]
+	return h, ok
+}
+
+func setAccessHash(channelID, accessHash int64) {
+	accessHashMu.Lock()
+	defer accessHashMu.Unlock()
+	accessHashCache[channelID] = accessHash
+}
 
 func ResolveFileLocation(ctx context.Context, client *gotgproto.Client, chatID int64, messageID int) (tg.InputFileLocationClass, int64, error) {
 	if chatID == 0 || messageID == 0 {
@@ -27,11 +46,23 @@ func ResolveFileLocation(ctx context.Context, client *gotgproto.Client, chatID i
 		ChannelID: channelID,
 	}
 
-	// Try to get access hash from peer storage
-	peer := client.PeerStorage.GetInputPeerById(chatID)
-	switch p := peer.(type) {
-	case *tg.InputPeerChannel:
-		inputChannel.AccessHash = p.AccessHash
+	// Try cached access hash first
+	if h, ok := getAccessHash(channelID); ok {
+		inputChannel.AccessHash = h
+	} else {
+		// Try peer storage
+		peer := client.PeerStorage.GetInputPeerById(chatID)
+		switch p := peer.(type) {
+		case *tg.InputPeerChannel:
+			inputChannel.AccessHash = p.AccessHash
+			setAccessHash(channelID, p.AccessHash)
+		}
+	}
+
+	// If no access hash, try resolving via all workers' peer storage won't work for private channels
+	// Instead, try sending getMessages — if one worker has it cached, use that hash
+	if inputChannel.AccessHash == 0 {
+		log.Printf("[stream] Warning: no access hash for channel %d, attempting anyway", channelID)
 	}
 
 	msgID := tg.InputMessageClass(&tg.InputMessageID{ID: messageID})
