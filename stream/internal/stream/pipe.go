@@ -10,10 +10,7 @@ import (
 	"github.com/gotd/td/tg"
 )
 
-const (
-	defaultBlockSize = 1024 * 1024      // 1MB
-	firstBlockSize   = 256 * 1024       // 256KB for fast TTFB
-)
+const blockSize = 256 * 1024 // 256KB — balance between TTFB and throughput
 
 type Pipe struct {
 	ctx    context.Context
@@ -95,10 +92,9 @@ func (p *Pipe) prefetch() {
 	defer close(p.blockQueue)
 
 	sent := int64(0)
-	offset := p.start - (p.start % firstBlockSize)
+	offset := p.start - (p.start % blockSize)
 	skipBytes := p.start - offset
 
-	isFirst := true
 	for sent < p.totalBytes {
 		select {
 		case <-p.ctx.Done():
@@ -106,21 +102,14 @@ func (p *Pipe) prefetch() {
 		default:
 		}
 
-		blockSize := defaultBlockSize
-		if isFirst {
-			blockSize = firstBlockSize
-			isFirst = false
-		}
-
-		data, err := p.downloadBlockSize(offset, int64(blockSize))
+		data, err := p.downloadBlockSize(offset, blockSize)
 		if err != nil {
 			return
 		}
 
-		// Skip leading bytes on first block (alignment)
 		if skipBytes > 0 {
 			if skipBytes >= int64(len(data)) {
-				offset += int64(blockSize)
+				offset += blockSize
 				skipBytes -= int64(len(data))
 				continue
 			}
@@ -128,7 +117,6 @@ func (p *Pipe) prefetch() {
 			skipBytes = 0
 		}
 
-		// Trim trailing bytes if we'd overshoot
 		remaining := p.totalBytes - sent
 		if int64(len(data)) > remaining {
 			data = data[:remaining]
@@ -141,7 +129,7 @@ func (p *Pipe) prefetch() {
 		}
 
 		sent += int64(len(data))
-		offset += int64(blockSize)
+		offset += blockSize
 	}
 }
 
