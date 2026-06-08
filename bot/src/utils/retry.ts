@@ -51,6 +51,8 @@ function isRetryable(err: any): boolean {
   if (err?.description?.includes("Too Many Requests") || err?.description?.includes("too Many Requests")) return true;
   // Network errors
   if (err?.code === "ECONNRESET" || err?.code === "ETIMEDOUT" || err?.code === "ECONNREFUSED") return true;
+  // grammY HttpError (network failure during upload)
+  if (err?.constructor?.name === "HttpError" || err?.message?.includes("Network request")) return true;
   return false;
 }
 

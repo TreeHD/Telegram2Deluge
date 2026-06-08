@@ -129,6 +129,10 @@ export function getJobById(jobId: string): { id: string; torrent_id: string; cha
   return db.prepare("SELECT id, torrent_id, chat_id, message_id, name FROM pipeline_jobs WHERE id = ?").get(jobId) as any;
 }
 
+export function getFailedJobs(): Array<{ id: string; torrent_id: string; chat_id: number; message_id: number; name: string; save_path: string; files: string; total_size: number }> {
+  return db.prepare("SELECT id, torrent_id, chat_id, message_id, name, save_path, files, total_size FROM pipeline_jobs WHERE status = 'failed' ORDER BY created_at DESC").all() as any;
+}
+
 // Stream files
 export function addStreamFile(jobId: string, filename: string, fileId: string, fileSize: number, chatId: number, messageId: number) {
   db.prepare(

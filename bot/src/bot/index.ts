@@ -8,10 +8,9 @@ import { handleMagnet } from "./handlers/magnet.js";
 import { handleUrl } from "./handlers/url.js";
 import { handleStatus } from "./handlers/status.js";
 import { handleDisk } from "./handlers/disk.js";
-import { handleList } from "./handlers/list.js";
 import { escapeHtml } from "../utils/html.js";
 import { withRetry } from "../utils/retry.js";
-import { getJobById, removeTrackedTorrent, getStreamFiles } from "../db/index.js";
+import { getJobById, removeTrackedTorrent, getStreamFiles, updateJobStatus } from "../db/index.js";
 import { generateStreamUrl } from "../stream/index.js";
 import fs from "node:fs";
 import path from "node:path";
@@ -56,13 +55,13 @@ export function createBot(services: Services) {
   bot.command("start", (ctx) =>
     ctx.reply(
       "發送 .torrent 檔案、磁力鏈結或下載連結開始下載。\n\n" +
-        "指令:\n/status - 查看下載進度\n/list - 查看所有任務及檔案連結\n/disk - 查看磁碟空間"
+        "指令:\n/status - 查看所有任務狀態\n/disk - 查看磁碟空間"
     )
   );
 
   bot.command("status", handleStatus);
+  bot.command("list", handleStatus);
   bot.command("disk", handleDisk);
-  bot.command("list", handleList);
 
   bot.on("callback_query:data", async (ctx) => {
     const data = ctx.callbackQuery.data;
@@ -162,6 +161,13 @@ export function createBot(services: Services) {
         const jobId = data.slice(4);
         await ctx.pipeline.deleteJobAndTorrent(jobId, ctx.qb);
         await ctx.answerCallbackQuery({ text: "已刪除原始檔案及 qBittorrent 任務" });
+        try {
+          await ctx.deleteMessage();
+        } catch {}
+      } else if (data.startsWith("retry:")) {
+        const jobId = data.slice(6);
+        updateJobStatus(jobId, "pending");
+        await ctx.answerCallbackQuery({ text: "已重新排入處理佇列" });
         try {
           await ctx.deleteMessage();
         } catch {}
