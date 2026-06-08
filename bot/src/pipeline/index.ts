@@ -14,11 +14,13 @@ import {
   addPipelineJob,
   updateJobStatus,
   getNextPendingJob,
+  resetAllInterruptedJobs,
   addPendingAction,
   getPendingAction,
   removePendingAction,
   getJobById,
   addStreamFile,
+  getStreamFiles,
 } from "../db/index.js";
 import path from "node:path";
 import fs from "node:fs";
@@ -43,6 +45,10 @@ export class Pipeline {
   }
 
   private resumePending() {
+    const reset = resetAllInterruptedJobs();
+    if (reset > 0) {
+      logger.info({ count: reset }, "Reset interrupted jobs back to pending");
+    }
     const job = getNextPendingJob();
     if (job) {
       logger.info({ jobId: job.id, name: job.name }, "Resuming pending job from DB");
@@ -90,25 +96,30 @@ export class Pipeline {
 
       const uploadChatId = config.uploadChatId || job.chat_id;
 
-      await this.editStatus(job.chat_id, job.message_id, `${job.name}\n\n上傳到 Telegram 中...`);
+      // Check which files were already uploaded (resumption support)
+      const existingStreams = getStreamFiles(job.id);
+      const alreadyUploaded = new Set(existingStreams.map((s) => s.filename));
+      const filesToUpload = outputFiles.filter((f) => !alreadyUploaded.has(path.basename(f)));
 
-      // Upload to TG with 4 concurrent threads, results stay in order
-      const uploadResults = await parallelMap(outputFiles, async (file) => {
-        const result = await uploadToTelegram(this.api, uploadChatId, file);
-        return { file, result };
-      }, 4);
+      if (filesToUpload.length > 0) {
+        await this.editStatus(job.chat_id, job.message_id, `${job.name}\n\n上傳到 Telegram 中... (${existingStreams.length}/${outputFiles.length} 已完成)`);
 
-      const fileLinks: string[] = [];
-      for (const { file, result } of uploadResults) {
-        const link = buildMessageLink(uploadChatId, result.messageId);
-        const filename = path.basename(file);
-        const displayName = truncateFilename(filename, 60);
-        fileLinks.push(`<a href="${escapeHref(link)}">${escapeHtml(displayName)}</a>`);
-
-        if (result.fileId) {
+        const uploadResults = await parallelMap(filesToUpload, async (file) => {
+          const result = await uploadToTelegram(this.api, uploadChatId, file);
+          const filename = path.basename(file);
           const fileSize = fs.statSync(file).size;
           addStreamFile(job.id, filename, result.fileId, fileSize, uploadChatId, result.messageId);
-        }
+          return { file, result };
+        }, 4);
+      }
+
+      // Build file links from all stream_files (includes previously uploaded)
+      const allStreams = getStreamFiles(job.id);
+      const fileLinks: string[] = [];
+      for (const sf of allStreams) {
+        const link = buildMessageLink(uploadChatId, sf.message_id);
+        const displayName = truncateFilename(sf.filename, 60);
+        fileLinks.push(`<a href="${escapeHref(link)}">${escapeHtml(displayName)}</a>`);
       }
 
       addPendingAction(job.id, job.chat_id, outputFiles, downloadPath);

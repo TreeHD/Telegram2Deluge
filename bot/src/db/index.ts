@@ -102,6 +102,15 @@ export function getNextPendingJob(): { id: string; torrent_id: string; chat_id: 
   return db.prepare("SELECT * FROM pipeline_jobs WHERE status = 'pending' ORDER BY created_at ASC LIMIT 1").get() as any;
 }
 
+export function getNextInterruptedJob(): { id: string; name: string } | undefined {
+  return db.prepare("SELECT id, name FROM pipeline_jobs WHERE status = 'processing' ORDER BY created_at ASC LIMIT 1").get() as any;
+}
+
+export function resetAllInterruptedJobs(): number {
+  const result = db.prepare("UPDATE pipeline_jobs SET status = 'pending' WHERE status = 'processing'").run();
+  return result.changes;
+}
+
 export function getAllActiveJobs(): Array<{ id: string; torrent_id: string; chat_id: number; message_id: number; name: string; save_path: string; files: string; total_size: number; status: string }> {
   return db.prepare("SELECT * FROM pipeline_jobs WHERE status IN ('pending', 'processing') ORDER BY created_at ASC").all() as any;
 }

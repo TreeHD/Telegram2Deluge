@@ -1,33 +1,22 @@
 import { InlineKeyboard } from "grammy";
 import { BotContext } from "../index.js";
 import { config, logger } from "../../config.js";
-import { getAllTrackedTorrents, getAllPendingActions, getAllActiveJobs, getJobById, getFailedJobs, getStreamFiles } from "../../db/index.js";
+import { getAllPendingActions, getAllActiveJobs, getJobById, getFailedJobs, getStreamFiles } from "../../db/index.js";
 import { escapeHtml } from "../../utils/html.js";
 import { generateStreamUrl } from "../../stream/index.js";
 import { withRetry } from "../../utils/retry.js";
 import fs from "node:fs";
-import path from "node:path";
 
 export async function handleStatus(ctx: BotContext) {
-  try {
-    const tracked = getAllTrackedTorrents();
-    const pendingActions = getAllPendingActions();
-    const activeJobs = getAllActiveJobs();
-    const failedJobs = getFailedJobs();
-    const torrents = await ctx.qb.getTorrents();
+  const sections: string[] = [];
+  const keyboard = new InlineKeyboard();
 
-    // Active downloads (exclude completed/seeding)
+  // Active downloads
+  try {
+    const torrents = await ctx.qb.getTorrents();
     const activeTorrents = torrents.filter((t) =>
       t.progress < 1 || t.state === "error" || t.state === "missingFiles"
     );
-
-    if (activeTorrents.length === 0 && pendingActions.length === 0 && activeJobs.length === 0 && failedJobs.length === 0) {
-      await ctx.reply("目前沒有任何下載或待處理任務。");
-      return;
-    }
-
-    const sections: string[] = [];
-    const keyboard = new InlineKeyboard();
 
     for (const t of activeTorrents) {
       const speed = (t.dlspeed / 1024 / 1024).toFixed(2);
@@ -45,17 +34,33 @@ export async function handleStatus(ctx: BotContext) {
         .text("❌ 取消", `cancel:${t.hash}`)
         .row();
     }
+  } catch (err) {
+    logger.error(err, "Failed to fetch torrents for status");
+    sections.push("⚠️ 無法取得下載狀態");
+  }
 
-    // Pipeline jobs (pending/processing)
+  // Pipeline jobs (pending/processing)
+  try {
+    const activeJobs = getAllActiveJobs();
     for (const job of activeJobs) {
       const statusLabel = job.status === "processing" ? "⚙️ 處理中" : "🕐 排隊中";
       sections.push(
         `<b>${escapeHtml(job.name.slice(0, 60))}</b>\n` +
         `${statusLabel}`
       );
-    }
 
-    // Pending actions (upload completed, waiting for user)
+      keyboard.text("🔄 重試", `retry:${job.id}`);
+      keyboard.text("🗑️", `del:${job.id}`);
+      keyboard.row();
+    }
+  } catch (err) {
+    logger.error(err, "Failed to fetch active jobs for status");
+    sections.push("⚠️ 無法取得處理中任務");
+  }
+
+  // Pending actions (upload completed, waiting for user)
+  try {
+    const pendingActions = getAllPendingActions();
     for (const pending of pendingActions) {
       const files: string[] = JSON.parse(pending.files);
       const existingFiles = files.filter((f) => fs.existsSync(f));
@@ -79,8 +84,14 @@ export async function handleStatus(ctx: BotContext) {
       keyboard.text("🗑️", `del:${pending.job_id}`);
       keyboard.row();
     }
+  } catch (err) {
+    logger.error(err, "Failed to fetch pending actions for status");
+    sections.push("⚠️ 無法取得待處理任務");
+  }
 
-    // Failed jobs — show stream links if available
+  // Failed jobs
+  try {
+    const failedJobs = getFailedJobs();
     for (const job of failedJobs) {
       const streamFiles = getStreamFiles(job.id);
       const fileLinks: string[] = [];
@@ -106,7 +117,18 @@ export async function handleStatus(ctx: BotContext) {
       keyboard.text("🗑️", `del:${job.id}`);
       keyboard.row();
     }
+  } catch (err) {
+    logger.error(err, "Failed to fetch failed jobs for status");
+    sections.push("⚠️ 無法取得失敗任務");
+  }
 
+  // Send result
+  if (sections.length === 0) {
+    await ctx.reply("目前沒有任何下載或待處理任務。");
+    return;
+  }
+
+  try {
     const text = sections.join("\n\n");
     await withRetry(async () => {
       await ctx.reply(text, {
@@ -116,8 +138,8 @@ export async function handleStatus(ctx: BotContext) {
       } as any);
     }, "status");
   } catch (err) {
-    logger.error(err, "Failed to get status");
-    await ctx.reply("取得狀態失敗。");
+    logger.error(err, "Failed to send status message");
+    await ctx.reply("取得狀態失敗。").catch(() => {});
   }
 }
 
