@@ -147,7 +147,27 @@ export function createBot(services: Services) {
             return `<a href="${escapeHtml(url)}">${escapeHtml(f.filename)}</a>`;
           });
 
-          let text = `Stream 直鏈:\n${fileLinks.join("\n")}`;
+          // Split into chunks that fit Telegram's 4096 char limit
+          const chunks: string[] = [];
+          let current = "Stream 直鏈:";
+          for (const link of fileLinks) {
+            if (current.length + 1 + link.length > 4000) {
+              chunks.push(current);
+              current = "";
+            }
+            current += (current ? "\n" : "") + link;
+          }
+          if (current) chunks.push(current);
+
+          // Send all chunks except last without keyboard
+          for (let i = 0; i < chunks.length - 1; i++) {
+            await withRetry(async () => {
+              await bot.api.sendMessage(chatId, chunks[i], {
+                parse_mode: "HTML",
+                link_preview_options: { is_disabled: true },
+              } as any);
+            }, "stream_chunk");
+          }
 
           // m3u8 if multiple videos
           const videoExts = new Set([".mp4", ".mkv", ".m4v", ".ts", ".avi", ".mov", ".webm"]);
@@ -165,9 +185,10 @@ export function createBot(services: Services) {
             await bot.api.sendDocument(chatId, new InputFile(m3u8Buf, "playlist.m3u8"));
           }
 
+          // Last chunk with keyboard
           const keyboard = new InlineKeyboard().text("🗑️ 刪除原始檔", `del:${jobId}`);
           await withRetry(async () => {
-            await bot.api.sendMessage(chatId, text, {
+            await bot.api.sendMessage(chatId, chunks[chunks.length - 1], {
               parse_mode: "HTML",
               link_preview_options: { is_disabled: true },
               reply_markup: keyboard,
@@ -232,9 +253,29 @@ export function createBot(services: Services) {
               return `<a href="${escapeHtml(url)}">${escapeHtml(f.filename)}</a>`;
             });
 
+            const chunks: string[] = [];
+            let current = `Stream 直鏈 (${uploaded} 檔):`;
+            for (const link of fileLinks) {
+              if (current.length + 1 + link.length > 4000) {
+                chunks.push(current);
+                current = "";
+              }
+              current += (current ? "\n" : "") + link;
+            }
+            if (current) chunks.push(current);
+
+            for (let i = 0; i < chunks.length - 1; i++) {
+              await withRetry(async () => {
+                await bot.api.sendMessage(chatId, chunks[i], {
+                  parse_mode: "HTML",
+                  link_preview_options: { is_disabled: true },
+                } as any);
+              }, "reup_chunk");
+            }
+
             const keyboard = new InlineKeyboard().text("🗑️ 刪除原始檔", `del:${jobId}`);
             await withRetry(async () => {
-              await bot.api.sendMessage(chatId, `Stream 直鏈 (${uploaded} 檔):\n${fileLinks.join("\n")}`, {
+              await bot.api.sendMessage(chatId, chunks[chunks.length - 1], {
                 parse_mode: "HTML",
                 link_preview_options: { is_disabled: true },
                 reply_markup: keyboard,
