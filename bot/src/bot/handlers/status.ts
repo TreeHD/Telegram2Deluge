@@ -3,7 +3,6 @@ import { BotContext } from "../index.js";
 import { config, logger } from "../../config.js";
 import { getAllPendingActions, getAllActiveJobs, getJobById, getFailedJobs, getStreamFiles, getPendingAction } from "../../db/index.js";
 import { escapeHtml } from "../../utils/html.js";
-import { generateStreamUrl } from "../../stream/index.js";
 import { withRetry } from "../../utils/retry.js";
 import fs from "node:fs";
 
@@ -238,12 +237,7 @@ async function buildDetail(ctx: BotContext, type: string, id: string): Promise<D
     let text = `<b>${escapeHtml(job.name)}</b>\n\n⚠️ 處理失敗`;
 
     if (config.streamHost && streamFiles.length > 0) {
-      streamFiles.sort((a, b) => a.filename.localeCompare(b.filename, undefined, { numeric: true }));
-      const fileLinks = streamFiles.map((f) => {
-        const url = generateStreamUrl(f.message_id, f.filename);
-        return `<a href="${escapeHtml(url)}">${escapeHtml(f.filename)}</a>`;
-      });
-      text += ` (已上傳 ${streamFiles.length} 檔)\n\n${fileLinks.join("\n")}`;
+      text += ` (已上傳 ${streamFiles.length} 檔)`;
     }
 
     keyboard.text("🔄 重試", `retry:${id}`).text("📤 重傳", `reup:${id}`);
