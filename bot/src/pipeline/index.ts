@@ -2,6 +2,7 @@ import { Api, InlineKeyboard } from "grammy";
 import { config, logger } from "../config.js";
 import { splitToZip } from "./zipper.js";
 import { splitVideo } from "./ffmpeg.js";
+import { muxSubtitles } from "./mux.js";
 import { uploadToR2, getPresignedUrl } from "../storage/r2.js";
 import { uploadToFilebin, getFilebinBinUrl } from "../storage/filebin.js";
 import { uploadToTelegram, buildMessageLink } from "../storage/telegram.js";
@@ -321,6 +322,27 @@ export class Pipeline {
     const outputFiles: string[] = [];
     const targetSize = config.split.targetSizeMb;
 
+    // Collect all file paths
+    const allPaths = files.map((f) => path.join(savePath, f.path)).filter((f) => fs.existsSync(f));
+
+    // Attempt subtitle muxing
+    const muxResults = await muxSubtitles(allPaths, config.paths.processing);
+    const skipSet = new Set<string>();
+    for (const result of muxResults) {
+      skipSet.add(result.videoPath);
+      for (const sub of result.subtitlePaths) {
+        skipSet.add(sub);
+      }
+      // Muxed files may need splitting too
+      const muxSize = fs.statSync(result.outputPath).size / 1024 / 1024;
+      if (muxSize <= targetSize) {
+        outputFiles.push(result.outputPath);
+      } else {
+        const parts = await splitVideo(result.outputPath, targetSize);
+        outputFiles.push(...parts);
+      }
+    }
+
     for (const file of files) {
       const filePath = path.join(savePath, file.path);
 
@@ -328,6 +350,12 @@ export class Pipeline {
         logger.warn({ path: filePath }, "File not found, skipping");
         continue;
       }
+
+      if (skipSet.has(filePath)) continue;
+
+      // Skip standalone subtitle files if videos were muxed
+      const ext = path.extname(filePath).toLowerCase();
+      if (muxResults.length > 0 && (ext === ".ass" || ext === ".srt" || ext === ".ssa")) continue;
 
       const fileSize = fs.statSync(filePath).size;
       const sizeMb = fileSize / 1024 / 1024;

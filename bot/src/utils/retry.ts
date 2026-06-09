@@ -1,18 +1,20 @@
 import { Api } from "grammy";
 import { logger } from "../config.js";
 
-const MAX_RETRIES = 3;
+const MAX_RETRIES = 5;
 
 export async function withRetry<T>(fn: () => Promise<T>, label = "Telegram API"): Promise<T> {
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+  let attempt = 0;
+  while (true) {
+    attempt++;
     try {
       return await fn();
     } catch (err: any) {
       const retryAfter = extractRetryAfter(err);
 
-      if (retryAfter && attempt < MAX_RETRIES) {
-        logger.warn({ retryAfter, attempt, label }, "Rate limited, retrying...");
-        await sleep(retryAfter * 1000);
+      if (retryAfter) {
+        logger.warn({ retryAfter, attempt, label }, "Rate limited, waiting...");
+        await sleep((retryAfter + 1) * 1000);
         continue;
       }
 
@@ -25,8 +27,6 @@ export async function withRetry<T>(fn: () => Promise<T>, label = "Telegram API")
       throw err;
     }
   }
-
-  throw new Error(`${label}: max retries exceeded`);
 }
 
 function extractRetryAfter(err: any): number | null {
