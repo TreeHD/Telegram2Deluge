@@ -12,6 +12,8 @@ export function generateM3u8(files: Array<{ filename: string; url: string }>): s
   const videos = files.filter((f) => isPlaylistVideo(f.filename));
   if (videos.length <= 1) return null;
 
+  videos.sort((a, b) => a.filename.localeCompare(b.filename, undefined, { numeric: true }));
+
   const lines = ["#EXTM3U"];
   for (const video of videos) {
     lines.push(`#EXTINF:-1,${video.filename}`);

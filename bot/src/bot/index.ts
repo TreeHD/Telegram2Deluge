@@ -128,6 +128,8 @@ export function createBot(services: Services) {
             return;
           }
 
+          files.sort((a, b) => a.filename.localeCompare(b.filename, undefined, { numeric: true }));
+
           const fileLinks = files.map((f) => {
             const url = generateStreamUrl(f.message_id, f.filename);
             return `<a href="${escapeHtml(url)}">${escapeHtml(f.filename)}</a>`;
@@ -212,6 +214,7 @@ export function createBot(services: Services) {
 
           if (uploaded > 0) {
             const streamFiles = getStreamFiles(jobId);
+            streamFiles.sort((a, b) => a.filename.localeCompare(b.filename, undefined, { numeric: true }));
             const fileLinks = streamFiles.map((f) => {
               const url = generateStreamUrl(f.message_id, f.filename);
               return `<a href="${escapeHtml(url)}">${escapeHtml(f.filename)}</a>`;

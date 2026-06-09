@@ -115,6 +115,7 @@ export class Pipeline {
 
       // Build file links from all stream_files (includes previously uploaded)
       const allStreams = getStreamFiles(job.id);
+      allStreams.sort((a, b) => a.filename.localeCompare(b.filename, undefined, { numeric: true }));
       const fileLinks: string[] = [];
       for (const sf of allStreams) {
         const link = buildMessageLink(uploadChatId, sf.message_id);
