@@ -6,7 +6,7 @@ import { Pipeline } from "../pipeline/index.js";
 import { handleTorrentFile } from "./handlers/torrent.js";
 import { handleMagnet } from "./handlers/magnet.js";
 import { handleUrl } from "./handlers/url.js";
-import { handleStatus } from "./handlers/status.js";
+import { handleStatus, handleStatusBack, handleStatusDetail } from "./handlers/status.js";
 import { handleDisk } from "./handlers/disk.js";
 import { escapeHtml } from "../utils/html.js";
 import { withRetry } from "../utils/retry.js";
@@ -69,7 +69,19 @@ export function createBot(services: Services) {
     const chatId = ctx.callbackQuery.message!.chat.id;
 
     try {
-      if (data.startsWith("r2_yes:")) {
+      if (data.startsWith("sd:")) {
+        const rest = data.slice(3);
+        const colonIdx = rest.indexOf(":");
+        const type = rest.slice(0, colonIdx);
+        const id = rest.slice(colonIdx + 1);
+        await ctx.answerCallbackQuery();
+        await handleStatusDetail(ctx, type, id);
+
+      } else if (data === "sb:") {
+        await ctx.answerCallbackQuery();
+        await handleStatusBack(ctx);
+
+      } else if (data.startsWith("r2_yes:")) {
         const jobId = data.slice(7);
         await ctx.answerCallbackQuery({ text: "開始上傳到 R2，完成後會通知你" });
 
