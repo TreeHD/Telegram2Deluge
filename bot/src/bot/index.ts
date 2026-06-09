@@ -10,7 +10,7 @@ import { handleStatus, handleStatusBack, handleStatusDetail } from "./handlers/s
 import { handleDisk } from "./handlers/disk.js";
 import { escapeHtml } from "../utils/html.js";
 import { withRetry } from "../utils/retry.js";
-import { getJobById, removeTrackedTorrent, getStreamFiles, updateJobStatus, getPendingAction, addStreamFile } from "../db/index.js";
+import { getJobById, removeTrackedTorrent, getStreamFiles, updateJobStatus, getPendingAction, addStreamFile, clearStreamFiles } from "../db/index.js";
 import { generateStreamUrl } from "../stream/index.js";
 import { uploadToTelegram } from "../storage/telegram.js";
 import fs from "node:fs";
@@ -215,6 +215,7 @@ export function createBot(services: Services) {
         } catch {}
       } else if (data.startsWith("reup:")) {
         const jobId = data.slice(5);
+        clearStreamFiles(jobId);
         await ctx.answerCallbackQuery({ text: "重新上傳中..." });
 
         runInBackground(async () => {

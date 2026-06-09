@@ -157,4 +157,8 @@ export function getStreamFile(jobId: string, filename: string): { filename: stri
   return db.prepare("SELECT filename, file_id, file_size, chat_id, message_id FROM stream_files WHERE job_id = ? AND filename = ?").get(jobId, filename) as any;
 }
 
+export function clearStreamFiles(jobId: string) {
+  db.prepare("DELETE FROM stream_files WHERE job_id = ?").run(jobId);
+}
+
 export { db };
