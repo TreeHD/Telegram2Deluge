@@ -5,7 +5,6 @@ import { splitVideo } from "./ffmpeg.js";
 import { muxSubtitles } from "./mux.js";
 import { uploadToR2, getPresignedUrl } from "../storage/r2.js";
 import { uploadToFilebin, getFilebinBinUrl } from "../storage/filebin.js";
-import { uploadToTelegram, buildMessageLink } from "../storage/telegram.js";
 import { isVideoFile } from "./utils.js";
 import { QBClient } from "../qb/client.js";
 import { withRetry } from "../utils/retry.js";
@@ -20,8 +19,6 @@ import {
   getPendingAction,
   removePendingAction,
   getJobById,
-  addStreamFile,
-  getStreamFiles,
 } from "../db/index.js";
 import path from "node:path";
 import fs from "node:fs";
@@ -95,38 +92,9 @@ export class Pipeline {
       const outputFiles = await this.processFiles(job.save_path, jobFiles);
       const downloadPath = this.resolveDownloadPath(job.save_path, jobFiles);
 
-      const uploadChatId = config.uploadChatId || job.chat_id;
-
-      // Check which files were already uploaded (resumption support)
-      const existingStreams = getStreamFiles(job.id);
-      const alreadyUploaded = new Set(existingStreams.map((s) => s.filename));
-      const filesToUpload = outputFiles.filter((f) => !alreadyUploaded.has(path.basename(f)));
-
-      if (filesToUpload.length > 0) {
-        await this.editStatus(job.chat_id, job.message_id, `${job.name}\n\n上傳到 Telegram 中... (${existingStreams.length}/${outputFiles.length} 已完成)`);
-
-        const uploadResults = await parallelMap(filesToUpload, async (file) => {
-          const result = await uploadToTelegram(this.api, uploadChatId, file);
-          const filename = path.basename(file);
-          const fileSize = fs.statSync(file).size;
-          addStreamFile(job.id, filename, result.fileId, fileSize, uploadChatId, result.messageId);
-          return { file, result };
-        }, 4);
-      }
-
-      // Build file links from all stream_files (includes previously uploaded)
-      const allStreams = getStreamFiles(job.id);
-      allStreams.sort((a, b) => a.filename.localeCompare(b.filename, undefined, { numeric: true }));
-      const fileLinks: string[] = [];
-      for (const sf of allStreams) {
-        const link = buildMessageLink(uploadChatId, sf.message_id);
-        const displayName = truncateFilename(sf.filename, 60);
-        fileLinks.push(`<a href="${escapeHref(link)}">${escapeHtml(displayName)}</a>`);
-      }
-
       addPendingAction(job.id, job.chat_id, outputFiles, downloadPath);
 
-      // Send a new message with file links + action buttons
+      // Send completion message with action buttons (no auto-upload)
       const keyboard = new InlineKeyboard()
         .text("上傳 R2", `r2_yes:${job.id}`);
       if (config.streamHost) {
@@ -137,29 +105,15 @@ export class Pipeline {
       }
       keyboard.row().text("🗑️ 刪除原始檔", `del:${job.id}`);
 
-      const header = `${escapeHtml(truncateFilename(job.name, 100))}\n\n`;
-      const footer = `\n\n選擇後續動作：`;
-      const chunks = splitLinksIntoChunks(fileLinks, 4000 - header.length - footer.length);
-
-      const firstText = header + chunks[0] + footer;
+      const text = `${escapeHtml(truncateFilename(job.name, 100))}\n\n✅ 處理完成 (${outputFiles.length} 個檔案)\n選擇後續動作：`;
       await withRetry(async () => {
-        await this.api.sendMessage(job.chat_id, firstText, {
+        await this.api.sendMessage(job.chat_id, text, {
           parse_mode: "HTML",
           link_preview_options: { is_disabled: true },
           reply_markup: keyboard,
           reply_to_message_id: job.message_id,
         } as any);
       }, "pipeline:resultMessage");
-
-      for (let i = 1; i < chunks.length; i++) {
-        await withRetry(async () => {
-          await this.api.sendMessage(job.chat_id, chunks[i], {
-            parse_mode: "HTML",
-            link_preview_options: { is_disabled: true },
-            reply_to_message_id: job.message_id,
-          } as any);
-        }, "pipeline:overflowMessage");
-      }
 
       updateJobStatus(job.id, "done");
     } catch (err) {
@@ -390,35 +344,6 @@ function truncateFilename(name: string, maxLen: number): string {
   const ext = path.extname(name);
   const base = name.slice(0, maxLen - ext.length - 3);
   return `${base}...${ext}`;
-}
-
-function splitLinksIntoChunks(links: string[], firstChunkMax: number): string[] {
-  const chunks: string[] = [];
-  let current = "";
-
-  const maxLen = firstChunkMax;
-
-  for (const link of links) {
-    const line = current.length === 0 ? link : `\n${link}`;
-    const limit = chunks.length === 0 ? maxLen : 4000;
-
-    if (current.length + line.length > limit) {
-      if (current.length > 0) {
-        chunks.push(current);
-        current = link;
-      } else {
-        chunks.push(link);
-      }
-    } else {
-      current += line;
-    }
-  }
-
-  if (current.length > 0) {
-    chunks.push(current);
-  }
-
-  return chunks.length > 0 ? chunks : [""];
 }
 
 async function parallelMap<T, R>(items: T[], fn: (item: T) => Promise<R>, concurrency: number): Promise<R[]> {

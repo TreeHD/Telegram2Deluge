@@ -127,18 +127,44 @@ export function createBot(services: Services) {
 
       } else if (data.startsWith("st_yes:")) {
         const jobId = data.slice(7);
-        await ctx.answerCallbackQuery({ text: "產生直鏈中..." });
+        await ctx.answerCallbackQuery({ text: "上傳到 Telegram 中..." });
 
         runInBackground(async () => {
-          const files = getStreamFiles(jobId);
+          let files = getStreamFiles(jobId);
+
+          // Upload to Telegram if not yet uploaded
           if (files.length === 0) {
-            const keyboard = new InlineKeyboard().text("📤 重新上傳", `reup:${jobId}`);
-            await withRetry(async () => {
-              await bot.api.sendMessage(chatId, "找不到已上傳的串流檔案，請先重新上傳。", {
-                reply_markup: keyboard,
-              } as any);
-            }, "st_no_files");
-            return;
+            const pending = getPendingAction(jobId);
+            if (!pending) {
+              await sendMessage(bot.api, chatId, "找不到待上傳的檔案記錄。");
+              return;
+            }
+            const pendingFiles: string[] = JSON.parse(pending.files);
+            const existingFiles = pendingFiles.filter((f) => fs.existsSync(f));
+            if (existingFiles.length === 0) {
+              await sendMessage(bot.api, chatId, "原始檔案已不存在。");
+              return;
+            }
+
+            const uploadChatId = config.uploadChatId || chatId;
+            await sendMessage(bot.api, chatId, `開始上傳 ${existingFiles.length} 個檔案到 Telegram...`);
+
+            for (const file of existingFiles) {
+              try {
+                const result = await uploadToTelegram(bot.api, uploadChatId, file);
+                const filename = path.basename(file);
+                const fileSize = fs.statSync(file).size;
+                addStreamFile(jobId, filename, result.fileId, fileSize, uploadChatId, result.messageId);
+              } catch (err) {
+                logger.error(err, `Failed to upload ${path.basename(file)}`);
+              }
+            }
+
+            files = getStreamFiles(jobId);
+            if (files.length === 0) {
+              await sendMessage(bot.api, chatId, "所有檔案上傳失敗，請查看 log。");
+              return;
+            }
           }
 
           files.sort((a, b) => a.filename.localeCompare(b.filename, undefined, { numeric: true }));
