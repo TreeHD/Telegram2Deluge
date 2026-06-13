@@ -216,9 +216,12 @@ async function buildDetail(ctx: BotContext, type: string, id: string): Promise<D
       `<b>${escapeHtml(name)}</b>\n\n` +
       `📁 ${existingFiles.length} 個檔案待處理`;
 
-    keyboard.text("R2", `r2_yes:${id}`).text("Filebin", `fb_yes:${id}`);
+    keyboard.text("R2", `r2_yes:${id}`);
     if (config.streamHost) {
       keyboard.text("Stream", `st_yes:${id}`);
+    }
+    if (config.paths.library) {
+      keyboard.text("📂 入庫", `lib:${id}`);
     }
     keyboard.row();
     keyboard.text("📤 重傳", `reup:${id}`).text("🗑️ 刪除", `del:${id}`).row();
