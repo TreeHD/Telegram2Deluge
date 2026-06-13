@@ -4,6 +4,12 @@ import checkDiskSpace from "check-disk-space";
 import { config, logger } from "../config.js";
 import { getPendingAction } from "../db/index.js";
 
+const LIBRARY_EXTS = new Set([
+  ".mkv", ".mp4", ".m4v", ".avi", ".mov", ".webm", ".ts",
+  ".ass", ".srt", ".ssa",
+  ".nfo",
+]);
+
 export interface LibraryResult {
   copied: string[];
   skipped: string[];
@@ -22,9 +28,13 @@ export async function copyToLibrary(jobId: string): Promise<LibraryResult> {
   }
 
   const files: string[] = JSON.parse(pending.files);
-  const existingFiles = files.filter((f) => fs.existsSync(f));
+  const existingFiles = files.filter((f) => {
+    if (!fs.existsSync(f)) return false;
+    const ext = path.extname(f).toLowerCase();
+    return LIBRARY_EXTS.has(ext);
+  });
   if (existingFiles.length === 0) {
-    return { copied: [], skipped: [], error: "原始檔案已不存在" };
+    return { copied: [], skipped: [], error: "沒有符合入庫條件的檔案" };
   }
 
   // Determine destination: if files share a common parent folder name, preserve it
