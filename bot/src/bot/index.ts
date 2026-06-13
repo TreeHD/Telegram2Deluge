@@ -13,6 +13,7 @@ import { withRetry } from "../utils/retry.js";
 import { getJobById, removeTrackedTorrent, getStreamFiles, updateJobStatus, getPendingAction, addStreamFile, clearStreamFiles } from "../db/index.js";
 import { generateStreamUrl } from "../stream/index.js";
 import { uploadToTelegram } from "../storage/telegram.js";
+import { copyToLibrary } from "../pipeline/library.js";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -287,6 +288,29 @@ export function createBot(services: Services) {
           }
         }, "reupload");
 
+      } else if (data.startsWith("lib:")) {
+        const jobId = data.slice(4);
+        await ctx.answerCallbackQuery({ text: "入庫中..." });
+
+        runInBackground(async () => {
+          const result = await copyToLibrary(jobId);
+          let text = "";
+          if (result.error) {
+            text = `入庫失敗: ${result.error}`;
+          } else {
+            if (result.copied.length > 0) {
+              text += `已入庫 ${result.copied.length} 個檔案`;
+            }
+            if (result.skipped.length > 0) {
+              text += (text ? "\n" : "") + `跳過 ${result.skipped.length} 個檔案 (已存在):\n${result.skipped.join("\n")}`;
+            }
+            if (!text) {
+              text = "沒有檔案需要入庫。";
+            }
+          }
+          await sendMessage(bot.api, chatId, text);
+        }, "library_copy");
+
       } else if (data.startsWith("cancel:")) {
         const hash = data.slice(7);
         const tracked = ctx.monitor.getTracked(hash);
@@ -338,10 +362,12 @@ export function createBot(services: Services) {
           const name = job?.name || jobId;
           const fileList = existingFiles.map((f) => `• ${escapeHtml(path.basename(f))}`).slice(0, 20);
           const keyboard = new InlineKeyboard()
-            .text("上傳 R2", `r2_yes:${jobId}`)
-            .text("上傳 Filebin", `fb_yes:${jobId}`);
+            .text("上傳 R2", `r2_yes:${jobId}`);
           if (config.streamHost) {
             keyboard.text("Stream 直鏈", `st_yes:${jobId}`);
+          }
+          if (config.paths.library) {
+            keyboard.text("📂 入庫", `lib:${jobId}`);
           }
           keyboard.row().text("🗑️ 刪除原始檔", `del:${jobId}`);
           const text =

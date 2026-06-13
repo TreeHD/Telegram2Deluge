@@ -128,10 +128,12 @@ export class Pipeline {
 
       // Send a new message with file links + action buttons
       const keyboard = new InlineKeyboard()
-        .text("上傳 R2", `r2_yes:${job.id}`)
-        .text("上傳 Filebin", `fb_yes:${job.id}`);
+        .text("上傳 R2", `r2_yes:${job.id}`);
       if (config.streamHost) {
         keyboard.text("Stream 直鏈", `st_yes:${job.id}`);
+      }
+      if (config.paths.library) {
+        keyboard.text("📂 入庫", `lib:${job.id}`);
       }
       keyboard.row().text("🗑️ 刪除原始檔", `del:${job.id}`);
 

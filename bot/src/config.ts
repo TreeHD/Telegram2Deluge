@@ -44,6 +44,7 @@ export const config = {
     downloads: optional("DOWNLOAD_DIR", "/downloads"),
     processing: optional("PROCESSING_DIR", "/processing"),
     queue: optional("QUEUE_DIR", "/data/queue"),
+    library: process.env.LIBRARY_PATH || "",
   },
 
   cleanup: {
