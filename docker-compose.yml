@@ -43,6 +43,7 @@ services:
       - ./data/downloads:/downloads
       - ./data/processing:/processing
       - ./data/queue:/data/queue
+      - ./data/telegram-bot-api:/var/lib/telegram-bot-api:ro
 
   stream:
     image: ghcr.io/treehd/telegram2deluge-stream:latest
