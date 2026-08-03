@@ -1,14 +1,17 @@
 package stream
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"sync/atomic"
+	"time"
 
 	"tg-stream/internal/config"
 
 	"github.com/celestix/gotgproto"
 	"github.com/celestix/gotgproto/sessionMaker"
+	"github.com/celestix/gotgproto/storage"
 	"github.com/glebarez/sqlite"
 	"github.com/gotd/td/tg"
 )
@@ -58,7 +61,8 @@ func NewWorkerPool(cfg *config.Config, count int) (*WorkerPool, error) {
 		log.Printf("[pool] Worker %d started as @%s", i, client.Self.Username)
 	}
 
-	// Pre-resolve peers by loading dialogs on the first worker
+	// A fresh MTProto session has no peer records. Load dialogs to obtain and
+	// persist the upload channel's access hash before serving requests.
 	if cfg.UploadChat != 0 {
 		pool.resolveChannel(cfg.UploadChat)
 	}
@@ -88,7 +92,39 @@ func (p *WorkerPool) resolveChannel(chatID int64) {
 		}
 	}
 
-	log.Printf("[pool] Could not find non-zero access hash for channel %d in worker peer storage", channelID)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// PeerStorage is empty on first startup. Telegram includes channel access
+	// hashes in messages.getDialogs, so use that response to seed the storage.
+	for i, worker := range p.workers {
+		dialogs, err := worker.Client.API().MessagesGetDialogs(ctx, &tg.MessagesGetDialogsRequest{
+			Limit:      100,
+			OffsetPeer: &tg.InputPeerEmpty{},
+		})
+		if err != nil {
+			log.Printf("[pool] Worker %d could not load dialogs: %v", i, err)
+			continue
+		}
+
+		modified, ok := dialogs.AsModified()
+		if !ok {
+			continue
+		}
+		for _, chat := range modified.GetChats() {
+			channel, ok := chat.(*tg.Channel)
+			if !ok || channel.ID != channelID || channel.AccessHash == 0 {
+				continue
+			}
+
+			worker.Client.PeerStorage.AddPeer(channel.ID, channel.AccessHash, storage.TypeChannel, channel.Username)
+			setAccessHash(channelID, channel.AccessHash)
+			log.Printf("[pool] Resolved channel %d from worker %d dialogs", channelID, i)
+			return
+		}
+	}
+
+	log.Printf("[pool] Could not find channel %d with a non-zero access hash; ensure the bot is a member of UPLOAD_CHAT_ID", channelID)
 }
 
 func (p *WorkerPool) Next() (*gotgproto.Client, int) {
