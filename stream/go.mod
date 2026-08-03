@@ -5,12 +5,11 @@ go 1.25.0
 require (
 	github.com/celestix/gotgproto v1.0.0-beta22
 	github.com/glebarez/sqlite v1.11.0
-	github.com/gotd/td v0.161.0
+	github.com/gotd/td v0.132.0
 )
 
 require (
 	github.com/AnimeKaizoku/cacher v1.0.3-0.20250508132714-ddc7471efeef // indirect
-	github.com/andybalholm/brotli v1.2.1 // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/coder/websocket v1.8.15 // indirect
@@ -25,7 +24,6 @@ require (
 	github.com/go-faster/yaml v0.4.6 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gotd/ige v0.3.0 // indirect
-	github.com/gotd/log v0.1.0 // indirect
 	github.com/gotd/neo v0.1.5 // indirect
 	github.com/jinzhu/inflection v1.0.0 // indirect
 	github.com/jinzhu/now v1.1.5 // indirect
@@ -35,7 +33,6 @@ require (
 	github.com/ncruces/go-strftime v0.1.9 // indirect
 	github.com/ogen-go/ogen v1.23.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
-	github.com/refraction-networking/utls v1.8.2 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/segmentio/asm v1.2.1 // indirect
 	github.com/shopspring/decimal v1.4.0 // indirect
