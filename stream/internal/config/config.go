@@ -6,14 +6,15 @@ import (
 )
 
 type Config struct {
-	ApiID       int32
-	ApiHash     string
-	BotToken    string
-	StreamPort  int
-	Secret      string
-	SessionPath string
-	Workers     int
-	UploadChat  int64
+	ApiID                int32
+	ApiHash              string
+	BotToken             string
+	StreamPort           int
+	Secret               string
+	SessionPath          string
+	Workers              int
+	UploadChat           int64
+	UploadChatAccessHash int64
 }
 
 func Load() *Config {
@@ -21,16 +22,18 @@ func Load() *Config {
 	port, _ := strconv.Atoi(getEnv("STREAM_PORT", "8082"))
 	workers, _ := strconv.Atoi(getEnv("STREAM_WORKERS", "4"))
 	uploadChat, _ := strconv.ParseInt(getEnv("UPLOAD_CHAT_ID", "0"), 10, 64)
+	uploadChatAccessHash, _ := strconv.ParseInt(getEnv("UPLOAD_CHAT_ACCESS_HASH", "0"), 10, 64)
 
 	return &Config{
-		ApiID:       int32(apiID),
-		ApiHash:     getEnv("TELEGRAM_API_HASH", ""),
-		BotToken:    getEnv("BOT_TOKEN", ""),
-		StreamPort:  port,
-		Secret:      getEnv("STREAM_SECRET", "change-me"),
-		SessionPath: getEnv("SESSION_PATH", "/data/stream.session"),
-		Workers:     workers,
-		UploadChat:  uploadChat,
+		ApiID:                int32(apiID),
+		ApiHash:              getEnv("TELEGRAM_API_HASH", ""),
+		BotToken:             getEnv("BOT_TOKEN", ""),
+		StreamPort:           port,
+		Secret:               getEnv("STREAM_SECRET", "change-me"),
+		SessionPath:          getEnv("SESSION_PATH", "/data/stream.session"),
+		Workers:              workers,
+		UploadChat:           uploadChat,
+		UploadChatAccessHash: uploadChatAccessHash,
 	}
 }
 

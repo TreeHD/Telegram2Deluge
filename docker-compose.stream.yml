@@ -21,6 +21,7 @@ services:
       - TELEGRAM_API_ID=         # Telegram API ID
       - TELEGRAM_API_HASH=       # Telegram API Hash
       - UPLOAD_CHAT_ID=          # Chat ID where files are uploaded (for access hash resolution)
+      - UPLOAD_CHAT_ACCESS_HASH=${UPLOAD_CHAT_ACCESS_HASH:-0} # Needed to stream pre-existing messages after a fresh MTProto session
       - STREAM_PORT=8082
       - STREAM_SECRET=           # Shared secret with bot for URL signing
       - STREAM_WORKERS=4         # Number of MTProto workers (concurrent streams)

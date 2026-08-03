@@ -1,17 +1,14 @@
 package stream
 
 import (
-	"context"
 	"fmt"
 	"log"
 	"sync/atomic"
-	"time"
 
 	"tg-stream/internal/config"
 
 	"github.com/celestix/gotgproto"
 	"github.com/celestix/gotgproto/sessionMaker"
-	"github.com/celestix/gotgproto/storage"
 	"github.com/glebarez/sqlite"
 	"github.com/gotd/td/tg"
 )
@@ -61,8 +58,16 @@ func NewWorkerPool(cfg *config.Config, count int) (*WorkerPool, error) {
 		log.Printf("[pool] Worker %d started as @%s", i, client.Self.Username)
 	}
 
-	// A fresh MTProto session has no peer records. Load dialogs to obtain and
-	// persist the upload channel's access hash before serving requests.
+	// Bot accounts cannot call messages.getDialogs. A configured hash supports
+	// streaming existing messages immediately after a fresh session is created.
+	if cfg.UploadChatAccessHash != 0 {
+		channelID := channelIDFromChatID(cfg.UploadChat)
+		setAccessHash(channelID, cfg.UploadChatAccessHash)
+		log.Printf("[pool] Loaded configured access hash for channel %d", channelID)
+	}
+
+	// Peer storage is also populated from new channel updates received after
+	// startup, which makes future restarts work without the configured value.
 	if cfg.UploadChat != 0 {
 		pool.resolveChannel(cfg.UploadChat)
 	}
@@ -71,14 +76,7 @@ func NewWorkerPool(cfg *config.Config, count int) (*WorkerPool, error) {
 }
 
 func (p *WorkerPool) resolveChannel(chatID int64) {
-	// Strip -100 prefix
-	channelID := chatID
-	if channelID < 0 {
-		s := fmt.Sprintf("%d", -channelID)
-		if len(s) > 3 && s[:3] == "100" {
-			fmt.Sscanf(s[3:], "%d", &channelID)
-		}
-	}
+	channelID := channelIDFromChatID(chatID)
 
 	for i, worker := range p.workers {
 		peer := worker.Client.PeerStorage.GetInputPeerById(chatID)
@@ -92,39 +90,18 @@ func (p *WorkerPool) resolveChannel(chatID int64) {
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	log.Printf("[pool] Missing access hash for channel %d; set UPLOAD_CHAT_ACCESS_HASH to stream existing messages after a fresh session", channelID)
+}
 
-	// PeerStorage is empty on first startup. Telegram includes channel access
-	// hashes in messages.getDialogs, so use that response to seed the storage.
-	for i, worker := range p.workers {
-		dialogs, err := worker.Client.API().MessagesGetDialogs(ctx, &tg.MessagesGetDialogsRequest{
-			Limit:      100,
-			OffsetPeer: &tg.InputPeerEmpty{},
-		})
-		if err != nil {
-			log.Printf("[pool] Worker %d could not load dialogs: %v", i, err)
-			continue
-		}
-
-		modified, ok := dialogs.AsModified()
-		if !ok {
-			continue
-		}
-		for _, chat := range modified.GetChats() {
-			channel, ok := chat.(*tg.Channel)
-			if !ok || channel.ID != channelID || channel.AccessHash == 0 {
-				continue
-			}
-
-			worker.Client.PeerStorage.AddPeer(channel.ID, channel.AccessHash, storage.TypeChannel, channel.Username)
-			setAccessHash(channelID, channel.AccessHash)
-			log.Printf("[pool] Resolved channel %d from worker %d dialogs", channelID, i)
-			return
+func channelIDFromChatID(chatID int64) int64 {
+	channelID := chatID
+	if channelID < 0 {
+		s := fmt.Sprintf("%d", -channelID)
+		if len(s) > 3 && s[:3] == "100" {
+			fmt.Sscanf(s[3:], "%d", &channelID)
 		}
 	}
-
-	log.Printf("[pool] Could not find channel %d with a non-zero access hash; ensure the bot is a member of UPLOAD_CHAT_ID", channelID)
+	return channelID
 }
 
 func (p *WorkerPool) Next() (*gotgproto.Client, int) {

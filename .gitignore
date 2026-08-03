@@ -2,3 +2,6 @@ node_modules
 dist
 .env
 *.log
+.venv
+A.PY
+resolve_hash_session.session
