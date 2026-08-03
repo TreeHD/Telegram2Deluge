@@ -98,22 +98,22 @@ func ResolveFileLocation(ctx context.Context, client *gotgproto.Client, chatID i
 	}
 
 	// Try cached access hash first
-	if h, ok := getAccessHash(channelID); ok {
+	if h, ok := getAccessHash(channelID); ok && h != 0 {
 		inputChannel.AccessHash = h
 	} else {
-		// Try peer storage
+		// Try primary session peer storage
 		peer := client.PeerStorage.GetInputPeerById(chatID)
 		switch p := peer.(type) {
 		case *tg.InputPeerChannel:
-			inputChannel.AccessHash = p.AccessHash
-			setAccessHash(channelID, p.AccessHash)
+			if p.AccessHash != 0 {
+				inputChannel.AccessHash = p.AccessHash
+				setAccessHash(channelID, p.AccessHash)
+			}
 		}
 	}
 
-	// If no access hash, try resolving via all workers' peer storage won't work for private channels
-	// Instead, try sending getMessages — if one worker has it cached, use that hash
 	if inputChannel.AccessHash == 0 {
-		log.Printf("[stream] Warning: no access hash for channel %d, attempting anyway", channelID)
+		return nil, 0, fmt.Errorf("missing access hash for channel %d in primary stream.session peer storage", channelID)
 	}
 
 	msgID := tg.InputMessageClass(&tg.InputMessageID{ID: messageID})
