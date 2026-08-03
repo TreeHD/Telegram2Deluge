@@ -79,11 +79,22 @@ func handleStream(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
-	worker, workerID := pool.Next()
-	location, fileSize, err := stream.ResolveFileLocation(ctx, worker, cfg.UploadChat, messageID)
+	resolver := pool.Resolver()
+	if resolver == nil {
+		http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	location, fileSize, err := stream.ResolveFileLocation(ctx, resolver, cfg.UploadChat, messageID)
 	if err != nil {
 		log.Printf("[stream] Resolve error: chatID=%d msgID=%d err=%v", cfg.UploadChat, messageID, err)
 		http.Error(w, "File Not Available", http.StatusNotFound)
+		return
+	}
+
+	worker, workerID := pool.Next()
+	if worker == nil {
+		http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
 		return
 	}
 
