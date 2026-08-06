@@ -323,6 +323,9 @@ export function createBot(services: Services) {
           let text = "";
           if (result.error) {
             text = `入庫失敗: ${result.error}`;
+            if (result.copied.length > 0) {
+              text += `\n失敗前已入庫 ${result.copied.length} 個檔案`;
+            }
           } else {
             if (result.copied.length > 0) {
               text += `已入庫 ${result.copied.length} 個檔案`;

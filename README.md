@@ -18,7 +18,8 @@ Telegram Bot 串接 qBittorrent，自動下載種子並上傳到 Telegram + Clou
 - `/list` 互動式任務列表（點按查看詳情/操作）
 - `/disk` 查看磁碟剩餘空間
 - 每日自動更新 tracker 列表
-- 超過 24 小時的檔案 / qB 任務自動清理
+- 檔案 / qB 任務預設閒置超過 3 天自動清理
+- MoviePilot 入庫空間不足時改採逐檔搬入，待上一個檔案被取走後再繼續
 - 可選 WireGuard VPN（僅 qB 流量走 VPN tunnel）
 
 ## 架構
@@ -127,11 +128,12 @@ docker compose -f docker-compose.yml -f docker-compose.vpn.yml up -d
 | `R2_SECRET_ACCESS_KEY` | R2 Secret Key |
 | `R2_BUCKET_NAME` | R2 Bucket 名稱 |
 | `R2_PUBLIC_URL` | R2 公開 URL（選填） |
+| `LIBRARY_PATH` | MoviePilot 入庫監控目錄（選填） |
 | `STREAM_HOST` | Stream server 公開 URL（如 `http://ip:8082`） |
 | `STREAM_SECRET` | Stream URL 簽名密鑰（bot 與 stream 共用） |
 | `STREAM_API_KEY` | Stream API key（選填） |
 | `SPLIT_TARGET_SIZE_MB` | 分割大小上限（預設 `1950` MB） |
-| `CLEANUP_MAX_AGE_HOURS` | 自動清理時間（預設 `24` 小時） |
+| `CLEANUP_MAX_AGE_HOURS` | 檔案閒置後自動清理時間（預設 `72` 小時／3 天） |
 | `CLEANUP_INTERVAL_MINUTES` | 清理檢查間隔（預設 `5` 分鐘） |
 
 ## R2 設定

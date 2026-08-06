@@ -48,7 +48,7 @@ export const config = {
   },
 
   cleanup: {
-    maxAgeHours: parseInt(optional("CLEANUP_MAX_AGE_HOURS", "24"), 10),
+    maxAgeHours: parseInt(optional("CLEANUP_MAX_AGE_HOURS", "72"), 10),
     intervalMinutes: parseInt(optional("CLEANUP_INTERVAL_MINUTES", "5"), 10),
   },
 

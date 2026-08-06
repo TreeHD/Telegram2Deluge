@@ -68,7 +68,7 @@ func NewWorkerPool(cfg *config.Config, count int) (*WorkerPool, error) {
 
 	// Peer storage is also populated from new channel updates received after
 	// startup, which makes future restarts work without the configured value.
-	if cfg.UploadChat != 0 {
+	if cfg.UploadChat != 0 && cfg.UploadChatAccessHash == 0 {
 		pool.resolveChannel(cfg.UploadChat)
 	}
 
