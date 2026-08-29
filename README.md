@@ -6,8 +6,9 @@ Telegram Bot 串接 qBittorrent，自動下載種子並上傳到 Telegram + Clou
 
 - 傳送 `.torrent` 檔案、磁力鏈結或 URL 給 Bot，自動加入 qBittorrent 下載
 - 下載進度即時更新（每 15 秒編輯訊息 + 進度條）
-- 影片超過 2GB 自動 ffmpeg 切片（-c copy，不重新編碼）
-- 非影片超過 2GB 自動 zip 分割
+- 僅在上傳 Telegram（含 Stream 直鏈）時，影片超過 2GB 自動 ffmpeg 切片（-c copy，不重新編碼）
+- 僅在上傳 Telegram（含 Stream 直鏈）時，非影片超過 2GB 自動 zip 分割
+- R2 與 MoviePilot 入庫不做 2GB 分割
 - 上傳到指定群組，原訊息顯示檔案超連結清單
 - 可選上傳到 Cloudflare R2（24hr presigned URL）
 - 可選上傳到 Filebin（免費空間）
@@ -34,7 +35,7 @@ User (Telegram)
 [Bot Container (TypeScript + ffmpeg)]
     ├──► [qBittorrent] → 下載
     ├──► Monitor (輪詢進度)
-    ├──► Pipeline (ffmpeg 切片 / zip 分割)
+    ├──► Pipeline（保留原始檔案）
     ├──► Upload → Telegram (群組 + 訊息連結)
     ├──► Upload → R2 / Filebin (背景上傳)
     └──► Stream URL → 直接從 TG 雲端串流

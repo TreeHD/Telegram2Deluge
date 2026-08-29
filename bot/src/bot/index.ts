@@ -146,18 +146,43 @@ export function createBot(services: Services) {
               return;
             }
 
-            const uploadChatId = config.uploadChatId || chatId;
-            await sendMessage(bot.api, chatId, `開始上傳 ${existingFiles.length} 個檔案到 Telegram...`);
+            const telegramFiles = await ctx.pipeline.prepareFilesForTelegramUpload(existingFiles);
+            if (telegramFiles.files.length === 0) {
+              await sendMessage(bot.api, chatId, "沒有可上傳的檔案。");
+              return;
+            }
 
-            for (const file of existingFiles) {
-              try {
-                const result = await uploadToTelegram(bot.api, uploadChatId, file);
-                const filename = path.basename(file);
-                const fileSize = fs.statSync(file).size;
-                addStreamFile(jobId, filename, result.fileId, fileSize, uploadChatId, result.messageId);
-              } catch (err) {
-                logger.error(err, `Failed to upload ${path.basename(file)}`);
+            const uploadChatId = config.uploadChatId || chatId;
+            const progressMessage = await sendMessage(bot.api, chatId, `開始上傳 ${telegramFiles.files.length} 個檔案到 Telegram...`);
+
+            try {
+              for (let i = 0; i < telegramFiles.files.length; i++) {
+                const file = telegramFiles.files[i];
+                try {
+                  const result = await uploadToTelegram(
+                    bot.api,
+                    uploadChatId,
+                    file,
+                    undefined,
+                    (progress) => updateUploadProgress(
+                      bot.api,
+                      chatId,
+                      progressMessage.message_id,
+                      path.basename(file),
+                      i + 1,
+                      telegramFiles.files.length,
+                      progress,
+                    ),
+                  );
+                  const filename = path.basename(file);
+                  const fileSize = fs.statSync(file).size;
+                  addStreamFile(jobId, filename, result.fileId, fileSize, uploadChatId, result.messageId);
+                } catch (err) {
+                  logger.error(err, `Failed to upload ${path.basename(file)}`);
+                }
               }
+            } finally {
+              ctx.pipeline.cleanupTelegramUploadFiles(telegramFiles.temporaryFiles);
             }
 
             files = getStreamFiles(jobId);
@@ -259,18 +284,44 @@ export function createBot(services: Services) {
             return;
           }
 
+          const telegramFiles = await ctx.pipeline.prepareFilesForTelegramUpload(existingFiles);
+          if (telegramFiles.files.length === 0) {
+            await sendMessage(bot.api, chatId, "沒有可上傳的檔案。");
+            return;
+          }
+
           const uploadChatId = config.uploadChatId || chatId;
           let uploaded = 0;
-          for (const file of existingFiles) {
-            try {
-              const result = await uploadToTelegram(bot.api, uploadChatId, file);
-              const filename = path.basename(file);
-              const fileSize = fs.statSync(file).size;
-              addStreamFile(jobId, filename, result.fileId, fileSize, uploadChatId, result.messageId);
-              uploaded++;
-            } catch (err) {
-              logger.error(err, `Failed to re-upload ${path.basename(file)}`);
+          const progressMessage = await sendMessage(bot.api, chatId, `開始重新上傳 ${telegramFiles.files.length} 個檔案到 Telegram...`);
+          try {
+            for (let i = 0; i < telegramFiles.files.length; i++) {
+              const file = telegramFiles.files[i];
+              try {
+                const result = await uploadToTelegram(
+                  bot.api,
+                  uploadChatId,
+                  file,
+                  undefined,
+                  (progress) => updateUploadProgress(
+                    bot.api,
+                    chatId,
+                    progressMessage.message_id,
+                    path.basename(file),
+                    i + 1,
+                    telegramFiles.files.length,
+                    progress,
+                  ),
+                );
+                const filename = path.basename(file);
+                const fileSize = fs.statSync(file).size;
+                addStreamFile(jobId, filename, result.fileId, fileSize, uploadChatId, result.messageId);
+                uploaded++;
+              } catch (err) {
+                logger.error(err, `Failed to re-upload ${path.basename(file)}`);
+              }
             }
+          } finally {
+            ctx.pipeline.cleanupTelegramUploadFiles(telegramFiles.temporaryFiles);
           }
 
           if (uploaded > 0) {
@@ -451,12 +502,40 @@ function runInBackground(fn: () => Promise<void>, label: string) {
 }
 
 async function sendMessage(api: any, chatId: number, text: string) {
-  await withRetry(async () => {
-    await api.sendMessage(chatId, text, {
+  return withRetry(async () => {
+    return api.sendMessage(chatId, text, {
       parse_mode: "HTML",
       link_preview_options: { is_disabled: true },
     });
   }, "sendMessage");
+}
+
+function updateUploadProgress(
+  api: any,
+  chatId: number,
+  messageId: number,
+  filename: string,
+  currentFile: number,
+  totalFiles: number,
+  progress: import("../storage/telegram.js").UploadProgress,
+) {
+  const percent = progress.total > 0 ? Math.floor((progress.uploaded / progress.total) * 100) : 0;
+  const eta = progress.etaSeconds === null ? "計算中" : formatEta(Math.ceil(progress.etaSeconds));
+  const speed = formatBytes(progress.speedBytesPerSecond);
+  const text = `上傳中 (${currentFile}/${totalFiles})\n` +
+    `${escapeHtml(filename)}\n` +
+    `${percent}% (${formatBytes(progress.uploaded)} / ${formatBytes(progress.total)})\n` +
+    `速度: ${speed}/s｜ETA: ${eta}`;
+
+  api.editMessageText(chatId, messageId, text, { parse_mode: "HTML" }).catch((err: unknown) => {
+    logger.debug({ err }, "Failed to update upload progress");
+  });
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
 
 function formatEta(seconds: number): string {

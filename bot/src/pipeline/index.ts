@@ -23,6 +23,11 @@ import {
 import path from "node:path";
 import fs from "node:fs";
 
+export interface TelegramUploadFiles {
+  files: string[];
+  temporaryFiles: string[];
+}
+
 export interface CompletedTorrent {
   torrentId: string;
   chatId: number;
@@ -218,6 +223,62 @@ export class Pipeline {
     removePendingAction(jobId);
   }
 
+  /**
+   * Telegram's local Bot API accepts files up to 2 GB.  Keep pending-action
+   * files intact for R2 and library imports, and create split copies only
+   * immediately before a Telegram upload.
+   */
+  async prepareFilesForTelegramUpload(files: string[]): Promise<TelegramUploadFiles> {
+    const uploadFiles: string[] = [];
+    const temporaryFiles: string[] = [];
+    const targetSize = config.split.targetSizeMb;
+
+    for (const file of files) {
+      if (!fs.existsSync(file)) continue;
+
+      const sizeMb = fs.statSync(file).size / 1024 / 1024;
+      if (sizeMb <= targetSize) {
+        uploadFiles.push(file);
+        continue;
+      }
+
+      // A unique directory prevents simultaneous uploads with the same base
+      // filename from overwriting one another's temporary split files.
+      fs.mkdirSync(config.paths.processing, { recursive: true });
+      const temporaryDir = fs.mkdtempSync(path.join(config.paths.processing, "telegram-"));
+      let parts: string[];
+      try {
+        parts = isVideoFile(file)
+          ? await splitVideo(file, targetSize, temporaryDir)
+          : await splitToZip(file, targetSize, temporaryDir);
+      } catch (err) {
+        fs.rmSync(temporaryDir, { recursive: true, force: true });
+        throw err;
+      }
+
+      uploadFiles.push(...parts);
+      for (const part of parts) {
+        if (part !== file && part.startsWith(config.paths.processing)) {
+          temporaryFiles.push(part);
+        }
+      }
+    }
+
+    return { files: uploadFiles, temporaryFiles };
+  }
+
+  cleanupTelegramUploadFiles(files: string[]) {
+    this.cleanupProcessing(files);
+    const processingDir = path.resolve(config.paths.processing);
+    const directories = new Set(files.map((file) => path.dirname(file)));
+    for (const directory of directories) {
+      if (path.dirname(path.resolve(directory)) !== processingDir || !path.basename(directory).startsWith("telegram-")) {
+        continue;
+      }
+      try { fs.rmdirSync(directory); } catch {}
+    }
+  }
+
   deleteJobFiles(jobId: string) {
     const pending = getPendingAction(jobId);
     if (!pending) return;
@@ -276,7 +337,6 @@ export class Pipeline {
 
   private async processFiles(savePath: string, files: Array<{ path: string; size: number }>): Promise<string[]> {
     const outputFiles: string[] = [];
-    const targetSize = config.split.targetSizeMb;
 
     // Collect all file paths
     const allPaths = files.map((f) => path.join(savePath, f.path)).filter((f) => fs.existsSync(f));
@@ -289,14 +349,7 @@ export class Pipeline {
       for (const sub of result.subtitlePaths) {
         skipSet.add(sub);
       }
-      // Muxed files may need splitting too
-      const muxSize = fs.statSync(result.outputPath).size / 1024 / 1024;
-      if (muxSize <= targetSize) {
-        outputFiles.push(result.outputPath);
-      } else {
-        const parts = await splitVideo(result.outputPath, targetSize);
-        outputFiles.push(...parts);
-      }
+      outputFiles.push(result.outputPath);
     }
 
     for (const file of files) {
@@ -313,18 +366,9 @@ export class Pipeline {
       const ext = path.extname(filePath).toLowerCase();
       if (muxResults.length > 0 && (ext === ".ass" || ext === ".srt" || ext === ".ssa")) continue;
 
-      const fileSize = fs.statSync(filePath).size;
-      const sizeMb = fileSize / 1024 / 1024;
-
-      if (sizeMb <= targetSize) {
-        outputFiles.push(filePath);
-      } else if (isVideoFile(filePath)) {
-        const parts = await splitVideo(filePath, targetSize);
-        outputFiles.push(...parts);
-      } else {
-        const parts = await splitToZip(filePath, targetSize);
-        outputFiles.push(...parts);
-      }
+      // Do not split here. Pending files are used by R2 and library imports,
+      // both of which must receive the original file.
+      outputFiles.push(filePath);
     }
 
     return outputFiles;

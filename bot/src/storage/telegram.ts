@@ -11,19 +11,25 @@ export interface UploadResult {
   fileId: string;
 }
 
+export interface UploadProgress {
+  uploaded: number;
+  total: number;
+  speedBytesPerSecond: number;
+  etaSeconds: number | null;
+}
+
 export async function uploadToTelegram(
   api: Api,
   chatId: number,
   filePath: string,
-  replyToMessageId?: number
+  replyToMessageId?: number,
+  onProgress?: (progress: UploadProgress) => void
 ): Promise<UploadResult> {
   const filename = path.basename(filePath);
   const fileSize = fs.statSync(filePath).size;
   const sizeMb = (fileSize / 1024 / 1024).toFixed(0);
 
   logger.info({ filename, sizeMb }, "Uploading to Telegram (local path)");
-
-  const inputFile = new InputFile(filePath, filename);
 
   const opts: any = {
     caption: `${filename} (${sizeMb} MB)`,
@@ -34,6 +40,29 @@ export async function uploadToTelegram(
   }
 
   const msg = await withRetry(async () => {
+    let uploaded = 0;
+    const startedAt = Date.now();
+    let lastProgressAt = 0;
+    const stream = fs.createReadStream(filePath);
+    const countedStream = (async function* () {
+      for await (const chunk of stream) {
+        uploaded += chunk.length;
+        const now = Date.now();
+        if (onProgress && (now - lastProgressAt >= 1000 || uploaded === fileSize)) {
+          lastProgressAt = now;
+          const elapsedSeconds = Math.max((now - startedAt) / 1000, 0.001);
+          const speed = uploaded / elapsedSeconds;
+          onProgress({
+            uploaded,
+            total: fileSize,
+            speedBytesPerSecond: speed,
+            etaSeconds: speed > 0 ? (fileSize - uploaded) / speed : null,
+          });
+        }
+        yield chunk;
+      }
+    })();
+    const inputFile = new InputFile(countedStream, filename);
     if (isVideoFile(filePath)) {
       opts.supports_streaming = true;
       return api.sendVideo(chatId, inputFile, opts);

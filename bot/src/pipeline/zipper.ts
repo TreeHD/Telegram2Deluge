@@ -3,8 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { config, logger } from "../config.js";
 
-export async function splitToZip(inputPath: string, targetSizeMb: number): Promise<string[]> {
-  const outputDir = config.paths.processing;
+export async function splitToZip(inputPath: string, targetSizeMb: number, outputDir = config.paths.processing): Promise<string[]> {
   fs.mkdirSync(outputDir, { recursive: true });
 
   const basename = path.basename(inputPath, path.extname(inputPath));
