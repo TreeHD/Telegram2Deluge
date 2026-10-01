@@ -5,6 +5,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     make \
     g++ \
     ffmpeg \
+    p7zip-full \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

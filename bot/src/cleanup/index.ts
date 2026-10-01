@@ -20,16 +20,15 @@ async function cleanup() {
     const maxAgeMs = config.cleanup.maxAgeHours * 60 * 60 * 1000;
     const now = Date.now();
 
-    cleanupDisk(maxAgeMs, now);
+    cleanupDisk(config.paths.downloads, maxAgeMs, now);
+    cleanupDisk(config.paths.processing, maxAgeMs, now);
     await cleanupQB(maxAgeMs, now);
   } catch (err) {
     logger.error(err, "Cleanup cycle failed");
   }
 }
 
-function cleanupDisk(maxAgeMs: number, now: number) {
-  const dir = config.paths.downloads;
-
+function cleanupDisk(dir: string, maxAgeMs: number, now: number) {
   try {
     const entries = fs.readdirSync(dir, { withFileTypes: true });
 

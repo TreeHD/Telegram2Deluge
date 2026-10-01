@@ -1,8 +1,8 @@
-import { Bot, Context, InlineKeyboard } from "grammy";
+import { Api, Bot, Context, InlineKeyboard } from "grammy";
 import { config, logger } from "../config.js";
 import { QBClient } from "../qb/client.js";
 import { DownloadMonitor } from "../monitor/index.js";
-import { Pipeline } from "../pipeline/index.js";
+import { Pipeline, TelegramUploadFiles } from "../pipeline/index.js";
 import { handleTorrentFile } from "./handlers/torrent.js";
 import { handleMagnet } from "./handlers/magnet.js";
 import { handleUrl } from "./handlers/url.js";
@@ -155,36 +155,18 @@ export function createBot(services: Services) {
             const uploadChatId = config.uploadChatId || chatId;
             const progressMessage = await sendMessage(bot.api, chatId, `開始上傳 ${telegramFiles.files.length} 個檔案到 Telegram...`);
 
+            let failedGroups = 0;
             try {
-              for (let i = 0; i < telegramFiles.files.length; i++) {
-                const file = telegramFiles.files[i];
-                try {
-                  const result = await uploadToTelegram(
-                    bot.api,
-                    uploadChatId,
-                    file,
-                    undefined,
-                    (progress) => updateUploadProgress(
-                      bot.api,
-                      chatId,
-                      progressMessage.message_id,
-                      path.basename(file),
-                      i + 1,
-                      telegramFiles.files.length,
-                      progress,
-                    ),
-                  );
-                  const filename = path.basename(file);
-                  const fileSize = fs.statSync(file).size;
-                  addStreamFile(jobId, filename, result.fileId, fileSize, uploadChatId, result.messageId);
-                } catch (err) {
-                  logger.error(err, `Failed to upload ${path.basename(file)}`);
-                }
-              }
+              ({ failedGroups } = await uploadTelegramGroups(
+                bot.api, jobId, chatId, uploadChatId, progressMessage.message_id, telegramFiles,
+              ));
             } finally {
-              ctx.pipeline.cleanupTelegramUploadFiles(telegramFiles.temporaryFiles);
+              ctx.pipeline.retainTelegramUploadFiles(telegramFiles.temporaryFiles);
             }
 
+            if (failedGroups > 0) {
+              await sendMessage(bot.api, chatId, `⚠️ ${failedGroups} 組檔案上傳失敗，未提供不完整的分卷連結。可到 /status 選擇「重傳」。`);
+            }
             files = getStreamFiles(jobId);
             if (files.length === 0) {
               await sendMessage(bot.api, chatId, "所有檔案上傳失敗，請查看 log。");
@@ -238,7 +220,7 @@ export function createBot(services: Services) {
           }
 
           // Last chunk with keyboard
-          const keyboard = new InlineKeyboard().text("🗑️ 刪除原始檔", `del:${jobId}`);
+          const keyboard = new InlineKeyboard().text("🔄 重新上傳", `reup:${jobId}`).text("🗑️ 刪除原始檔", `del:${jobId}`);
           await withRetry(async () => {
             await bot.api.sendMessage(chatId, chunks[chunks.length - 1], {
               parse_mode: "HTML",
@@ -292,38 +274,19 @@ export function createBot(services: Services) {
 
           const uploadChatId = config.uploadChatId || chatId;
           let uploaded = 0;
+          let failedGroups = 0;
           const progressMessage = await sendMessage(bot.api, chatId, `開始重新上傳 ${telegramFiles.files.length} 個檔案到 Telegram...`);
           try {
-            for (let i = 0; i < telegramFiles.files.length; i++) {
-              const file = telegramFiles.files[i];
-              try {
-                const result = await uploadToTelegram(
-                  bot.api,
-                  uploadChatId,
-                  file,
-                  undefined,
-                  (progress) => updateUploadProgress(
-                    bot.api,
-                    chatId,
-                    progressMessage.message_id,
-                    path.basename(file),
-                    i + 1,
-                    telegramFiles.files.length,
-                    progress,
-                  ),
-                );
-                const filename = path.basename(file);
-                const fileSize = fs.statSync(file).size;
-                addStreamFile(jobId, filename, result.fileId, fileSize, uploadChatId, result.messageId);
-                uploaded++;
-              } catch (err) {
-                logger.error(err, `Failed to re-upload ${path.basename(file)}`);
-              }
-            }
+            ({ uploaded, failedGroups } = await uploadTelegramGroups(
+              bot.api, jobId, chatId, uploadChatId, progressMessage.message_id, telegramFiles,
+            ));
           } finally {
-            ctx.pipeline.cleanupTelegramUploadFiles(telegramFiles.temporaryFiles);
+            ctx.pipeline.retainTelegramUploadFiles(telegramFiles.temporaryFiles);
           }
 
+          if (failedGroups > 0) {
+            await sendMessage(bot.api, chatId, `⚠️ ${failedGroups} 組檔案上傳失敗，未提供不完整的分卷連結。可到 /status 選擇「重傳」。`);
+          }
           if (uploaded > 0) {
             const streamFiles = getStreamFiles(jobId);
             streamFiles.sort((a, b) => a.filename.localeCompare(b.filename, undefined, { numeric: true }));
@@ -352,7 +315,7 @@ export function createBot(services: Services) {
               }, "reup_chunk");
             }
 
-            const keyboard = new InlineKeyboard().text("🗑️ 刪除原始檔", `del:${jobId}`);
+            const keyboard = new InlineKeyboard().text("🔄 重新上傳", `reup:${jobId}`).text("🗑️ 刪除原始檔", `del:${jobId}`);
             await withRetry(async () => {
               await bot.api.sendMessage(chatId, chunks[chunks.length - 1], {
                 parse_mode: "HTML",
@@ -493,6 +456,53 @@ export function createBot(services: Services) {
   });
 
   return bot;
+}
+
+async function uploadTelegramGroups(
+  api: Api,
+  jobId: string,
+  chatId: number,
+  uploadChatId: number,
+  progressMessageId: number,
+  telegramFiles: TelegramUploadFiles,
+): Promise<{ uploaded: number; failedGroups: number }> {
+  let uploaded = 0;
+  let failedGroups = 0;
+  let fileIndex = 0;
+
+  for (const group of telegramFiles.groups) {
+    const completed: Array<{ file: string; result: Awaited<ReturnType<typeof uploadToTelegram>> }> = [];
+    for (const file of group) {
+      fileIndex++;
+      try {
+        const result = await uploadToTelegram(
+          api,
+          uploadChatId,
+          file,
+          undefined,
+          (progress) => updateUploadProgress(
+            api, chatId, progressMessageId, path.basename(file),
+            fileIndex, telegramFiles.files.length, progress,
+          ),
+        );
+        completed.push({ file, result });
+      } catch (err) {
+        logger.error(err, `Failed to upload ${path.basename(file)}`);
+        failedGroups++;
+        fileIndex += group.length - completed.length - 1;
+        break;
+      }
+    }
+
+    // A 7z archive is usable only when every volume is available.
+    if (completed.length !== group.length) continue;
+    for (const { file, result } of completed) {
+      addStreamFile(jobId, path.basename(file), result.fileId, fs.statSync(file).size, uploadChatId, result.messageId);
+      uploaded++;
+    }
+  }
+
+  return { uploaded, failedGroups };
 }
 
 function runInBackground(fn: () => Promise<void>, label: string) {

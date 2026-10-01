@@ -1,11 +1,9 @@
 import { Api, InlineKeyboard } from "grammy";
 import { config, logger } from "../config.js";
-import { splitToZip } from "./zipper.js";
-import { splitVideo } from "./ffmpeg.js";
+import { splitTo7z } from "./zipper.js";
 import { muxSubtitles } from "./mux.js";
 import { uploadToR2, getPresignedUrl } from "../storage/r2.js";
 import { uploadToFilebin, getFilebinBinUrl } from "../storage/filebin.js";
-import { isVideoFile } from "./utils.js";
 import { QBClient } from "../qb/client.js";
 import { withRetry } from "../utils/retry.js";
 import { escapeHtml, escapeHref } from "../utils/html.js";
@@ -26,6 +24,7 @@ import fs from "node:fs";
 export interface TelegramUploadFiles {
   files: string[];
   temporaryFiles: string[];
+  groups: string[][];
 }
 
 export interface CompletedTorrent {
@@ -167,12 +166,8 @@ export class Pipeline {
       await uploadToR2(m3u8Path, m3u8Key);
       const m3u8Url = await getPresignedUrl(m3u8Key);
       urls.push(`<a href="${escapeHref(m3u8Url)}">📋 playlist.m3u8</a>`);
-      try { fs.unlinkSync(m3u8Path); } catch {}
     }
 
-    this.cleanupProcessing(files);
-    this.deleteDownload(pending.download_path);
-    removePendingAction(jobId);
     return urls;
   }
 
@@ -231,51 +226,52 @@ export class Pipeline {
   async prepareFilesForTelegramUpload(files: string[]): Promise<TelegramUploadFiles> {
     const uploadFiles: string[] = [];
     const temporaryFiles: string[] = [];
+    const temporaryDirectories: string[] = [];
+    const groups: string[][] = [];
     const targetSize = config.split.targetSizeMb;
+    const targetBytes = targetSize * 1024 * 1024;
+    if (targetBytes <= 0) throw new Error("SPLIT_TARGET_SIZE_MB must be positive");
 
-    for (const file of files) {
-      if (!fs.existsSync(file)) continue;
+    try {
+      for (const file of files) {
+        if (!fs.existsSync(file)) continue;
 
-      const sizeMb = fs.statSync(file).size / 1024 / 1024;
-      if (sizeMb <= targetSize) {
-        uploadFiles.push(file);
-        continue;
-      }
-
-      // A unique directory prevents simultaneous uploads with the same base
-      // filename from overwriting one another's temporary split files.
-      fs.mkdirSync(config.paths.processing, { recursive: true });
-      const temporaryDir = fs.mkdtempSync(path.join(config.paths.processing, "telegram-"));
-      let parts: string[];
-      try {
-        parts = isVideoFile(file)
-          ? await splitVideo(file, targetSize, temporaryDir)
-          : await splitToZip(file, targetSize, temporaryDir);
-      } catch (err) {
-        fs.rmSync(temporaryDir, { recursive: true, force: true });
-        throw err;
-      }
-
-      uploadFiles.push(...parts);
-      for (const part of parts) {
-        if (part !== file && part.startsWith(config.paths.processing)) {
-          temporaryFiles.push(part);
+        if (fs.statSync(file).size <= targetBytes) {
+          uploadFiles.push(file);
+          groups.push([file]);
+          continue;
         }
+
+        // Separate each source file and upload attempt from other split output.
+        fs.mkdirSync(config.paths.processing, { recursive: true });
+        const temporaryDir = fs.mkdtempSync(path.join(config.paths.processing, "telegram-"));
+        temporaryDirectories.push(temporaryDir);
+        // Use the same recoverable archive format for every oversized file.
+        const parts = await splitTo7z(file, targetSize, temporaryDir);
+
+        uploadFiles.push(...parts);
+        groups.push(parts);
+        temporaryFiles.push(...parts);
       }
+    } catch (err) {
+      for (const directory of temporaryDirectories) {
+        fs.rmSync(directory, { recursive: true, force: true });
+      }
+      throw err;
     }
 
-    return { files: uploadFiles, temporaryFiles };
+    return { files: uploadFiles, temporaryFiles, groups };
   }
 
-  cleanupTelegramUploadFiles(files: string[]) {
-    this.cleanupProcessing(files);
+  retainTelegramUploadFiles(files: string[]) {
     const processingDir = path.resolve(config.paths.processing);
     const directories = new Set(files.map((file) => path.dirname(file)));
+    const now = new Date();
     for (const directory of directories) {
       if (path.dirname(path.resolve(directory)) !== processingDir || !path.basename(directory).startsWith("telegram-")) {
         continue;
       }
-      try { fs.rmdirSync(directory); } catch {}
+      try { fs.utimesSync(directory, now, now); } catch {}
     }
   }
 

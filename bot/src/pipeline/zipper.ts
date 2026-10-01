@@ -1,64 +1,48 @@
-import archiver from "archiver";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { config, logger } from "../config.js";
 
-export async function splitToZip(inputPath: string, targetSizeMb: number, outputDir = config.paths.processing): Promise<string[]> {
+/** Create one 7z archive split into real volumes that extraction tools can join. */
+export async function splitTo7z(inputPath: string, targetSizeMb: number, outputDir = config.paths.processing): Promise<string[]> {
+  const volumeBytes = Math.floor(targetSizeMb * 1024 * 1024);
+  if (volumeBytes <= 0) throw new Error("SPLIT_TARGET_SIZE_MB must be positive");
+
   fs.mkdirSync(outputDir, { recursive: true });
+  const archivePath = path.join(outputDir, `${path.basename(inputPath)}.7z`);
+  const archiveName = path.basename(archivePath);
 
-  const basename = path.basename(inputPath, path.extname(inputPath));
-  const fileSize = fs.statSync(inputPath).size;
-  const splitSize = (targetSizeMb - 50) * 1024 * 1024;
-  const partCount = Math.ceil(fileSize / splitSize);
+  await run7z([
+    "a", "-t7z", "-m0=lzma2", "-mx=7", `-v${volumeBytes}b`,
+    "-bd", "-y", archivePath, `./${path.basename(inputPath)}`,
+  ], path.dirname(inputPath));
 
-  if (partCount <= 1) {
-    const outputPath = path.join(outputDir, `${basename}.zip`);
-    await createZipWithFile(inputPath, outputPath);
-    return [outputPath];
+  const parts = fs.readdirSync(outputDir)
+    .filter((name) => name.startsWith(`${archiveName}.`) && /^\d+$/.test(name.slice(archiveName.length + 1)))
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+    .map((name) => path.join(outputDir, name));
+
+  if (parts.length === 0 || parts.some((part) => fs.statSync(part).size > volumeBytes)) {
+    throw new Error(`7z did not create valid volumes for ${inputPath}`);
   }
 
-  const parts: string[] = [];
-
-  for (let i = 0; i < partCount; i++) {
-    const partNum = String(i + 1).padStart(2, "0");
-    const outputPath = path.join(outputDir, `${basename}.part${partNum}.zip`);
-    const start = i * splitSize;
-    const end = Math.min(start + splitSize, fileSize);
-
-    await new Promise<void>((resolve, reject) => {
-      const output = fs.createWriteStream(outputPath);
-      const archive = archiver("zip", { zlib: { level: 1 } });
-
-      output.on("close", () => resolve());
-      archive.on("error", (err) => reject(err));
-
-      archive.pipe(output);
-
-      // Stream a slice of the file without loading entire file into memory
-      const readStream = fs.createReadStream(inputPath, { start, end: end - 1 });
-      archive.append(readStream, {
-        name: `${path.basename(inputPath)}.part${partNum}`,
-      });
-      archive.finalize();
-    });
-
-    parts.push(outputPath);
-  }
-
-  logger.info({ inputPath, parts: parts.length }, "File split into zip parts");
+  // Check the complete archive before any volume is uploaded or linked.
+  await run7z(["t", "-bd", parts[0]], outputDir);
+  logger.info({ inputPath, parts: parts.length }, "File split into 7z volumes");
   return parts;
 }
 
-async function createZipWithFile(inputPath: string, outputPath: string): Promise<void> {
+function run7z(args: string[], cwd: string): Promise<void> {
   return new Promise((resolve, reject) => {
-    const output = fs.createWriteStream(outputPath);
-    const archive = archiver("zip", { zlib: { level: 1 } });
-
-    output.on("close", () => resolve());
-    archive.on("error", (err) => reject(err));
-
-    archive.pipe(output);
-    archive.file(inputPath, { name: path.basename(inputPath) });
-    archive.finalize();
+    const proc = spawn("7z", args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
+    let output = "";
+    const append = (data: Buffer) => { output = (output + data.toString()).slice(-2000); };
+    proc.stdout.on("data", append);
+    proc.stderr.on("data", append);
+    proc.on("error", reject);
+    proc.on("close", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`7z exited with code ${code}: ${output}`));
+    });
   });
 }
