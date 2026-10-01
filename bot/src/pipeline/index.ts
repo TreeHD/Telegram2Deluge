@@ -1,9 +1,11 @@
 import { Api, InlineKeyboard } from "grammy";
 import { config, logger } from "../config.js";
 import { splitTo7z } from "./zipper.js";
+import { splitVideo } from "./ffmpeg.js";
 import { muxSubtitles } from "./mux.js";
 import { uploadToR2, getPresignedUrl } from "../storage/r2.js";
 import { uploadToFilebin, getFilebinBinUrl } from "../storage/filebin.js";
+import { isVideoFile } from "./utils.js";
 import { QBClient } from "../qb/client.js";
 import { withRetry } from "../utils/retry.js";
 import { escapeHtml, escapeHref } from "../utils/html.js";
@@ -246,8 +248,9 @@ export class Pipeline {
         fs.mkdirSync(config.paths.processing, { recursive: true });
         const temporaryDir = fs.mkdtempSync(path.join(config.paths.processing, "telegram-"));
         temporaryDirectories.push(temporaryDir);
-        // Use the same recoverable archive format for every oversized file.
-        const parts = await splitTo7z(file, targetSize, temporaryDir);
+        const parts = isVideoFile(file)
+          ? await splitVideo(file, targetSize, temporaryDir)
+          : await splitTo7z(file, targetSize, temporaryDir);
 
         uploadFiles.push(...parts);
         groups.push(parts);

@@ -6,7 +6,7 @@ Telegram Bot 串接 qBittorrent，自動下載種子並上傳到 Telegram + Clou
 
 - 傳送 `.torrent` 檔案、磁力鏈結或 URL 給 Bot，自動加入 qBittorrent 下載
 - 下載進度即時更新（每 15 秒編輯訊息 + 進度條）
-- 僅在選擇 Stream 直鏈時，任何類型的檔案超過上傳上限都建立 7z 分卷；下載全部分卷後開啟 `.7z.001` 解壓
+- 僅在選擇 Stream 直鏈時，超過上傳上限的影片用 ffmpeg 分片，其餘檔案建立 7z 分卷；下載全部分卷後開啟 `.7z.001` 解壓
 - R2 與 MoviePilot 入庫不做 2GB 分割
 - 上傳到指定群組，原訊息顯示檔案超連結清單
 - 可選上傳到 Cloudflare R2（24hr presigned URL）

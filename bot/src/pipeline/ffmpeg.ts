@@ -8,55 +8,64 @@ export async function splitVideo(inputPath: string, targetSizeMb: number, output
 
   const basename = path.basename(inputPath, path.extname(inputPath));
   const ext = path.extname(inputPath);
+  const targetBytes = Math.floor(targetSizeMb * 1024 * 1024);
+  if (targetBytes <= 0) throw new Error("SPLIT_TARGET_SIZE_MB must be positive");
 
   const duration = await getVideoDuration(inputPath);
-  if (!duration || duration <= 0) {
-    logger.warn({ inputPath }, "Cannot determine video duration, returning as-is");
-    return [inputPath];
+  if (!Number.isFinite(duration) || duration <= 0) {
+    throw new Error(`Cannot determine video duration for ${inputPath}`);
   }
 
   const fileSize = fs.statSync(inputPath).size;
-  const targetBytes = targetSizeMb * 1024 * 1024;
   const numParts = Math.ceil(fileSize / targetBytes);
-  const segmentDuration = Math.floor(duration / numParts);
-
-  if (segmentDuration < 10) {
-    logger.warn({ inputPath, segmentDuration }, "Segment duration too short");
-    return [inputPath];
-  }
+  let segmentDuration = Math.max(0.1, duration / numParts * 0.9);
 
   const outputPattern = path.join(outputDir, `${basename}.part%03d${ext}`);
+  const partPrefix = `${basename}.part`;
+  const getParts = () => fs.readdirSync(outputDir)
+    .filter((name) => name.startsWith(partPrefix) && name.endsWith(ext)
+      && /^\d+$/.test(name.slice(partPrefix.length, -ext.length)))
+    .sort()
+    .map((name) => path.join(outputDir, name));
+  const removeParts = (parts: string[]) => {
+    for (const part of parts) fs.rmSync(part, { force: true });
+  };
 
-  try {
-    await runFfmpeg([
-      "-y", "-i", inputPath,
-      "-c", "copy",
-      "-map", "0",
-      "-f", "segment",
-      "-segment_time", `${segmentDuration}`,
-      "-reset_timestamps", "1",
-      outputPattern,
-    ]);
-
-    const parts: string[] = [];
-    const files = fs.readdirSync(outputDir).sort();
-    for (const f of files) {
-      if (f.startsWith(`${basename}.part`) && f.endsWith(ext)) {
-        parts.push(path.join(outputDir, f));
-      }
+  removeParts(getParts());
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      await runFfmpeg([
+        "-y", "-i", inputPath,
+        "-c", "copy",
+        "-map", "0",
+        "-f", "segment",
+        "-segment_time", `${segmentDuration}`,
+        "-reset_timestamps", "1",
+        outputPattern,
+      ]);
+    } catch (err) {
+      removeParts(getParts());
+      throw err;
     }
 
-    if (parts.length === 0) {
-      logger.error({ inputPath }, "FFmpeg segment produced no output");
-      return [inputPath];
+    const parts = getParts();
+    if (parts.length === 0) throw new Error(`FFmpeg produced no video segments for ${inputPath}`);
+    const sizes = parts.map((part) => fs.statSync(part).size);
+    const largest = Math.max(...sizes);
+    if (sizes.every((size) => size > 0 && size <= targetBytes)) {
+      logger.info({ inputPath, parts: parts.length, segmentDuration }, "Video split into segments");
+      return parts;
     }
 
-    logger.info({ inputPath, parts: parts.length, segmentDuration }, "Video split into segments");
-    return parts;
-  } catch (err) {
-    logger.error(err, "FFmpeg segment failed");
-    return [inputPath];
+    removeParts(parts);
+    if (attempt === 3) {
+      throw new Error(`FFmpeg could not split ${inputPath} into segments below ${targetBytes} bytes`);
+    }
+    segmentDuration = Math.max(0.1, Math.min(segmentDuration * 0.75, segmentDuration * targetBytes / largest * 0.8));
+    logger.warn({ inputPath, segmentDuration, largest }, "Retrying oversized video segments");
   }
+
+  throw new Error(`FFmpeg could not split ${inputPath}`);
 }
 
 function getVideoDuration(filePath: string): Promise<number> {
@@ -88,7 +97,7 @@ function runFfmpeg(args: string[]): Promise<void> {
     const proc = spawn("ffmpeg", args, { stdio: ["ignore", "pipe", "pipe"] });
 
     let stderr = "";
-    proc.stderr.on("data", (data) => { stderr += data; });
+    proc.stderr.on("data", (data) => { stderr = (stderr + data).slice(-2000); });
 
     proc.on("close", (code) => {
       if (code === 0) resolve();
