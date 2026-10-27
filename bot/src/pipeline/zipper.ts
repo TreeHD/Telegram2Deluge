@@ -32,6 +32,61 @@ export async function splitTo7z(inputPath: string, targetSizeMb: number, outputD
   return parts;
 }
 
+/** Package a job without flattening its download directory or silently omitting files. */
+export async function createZip(
+  files: string[], name: string, sourceRoot: string, outputDir: string, targetSizeMb?: number,
+): Promise<string[]> {
+  if (files.length === 0) throw new Error("沒有可打包的檔案。");
+  const volumeBytes = targetSizeMb === undefined ? undefined : Math.floor(targetSizeMb * 1024 * 1024);
+  if (volumeBytes !== undefined && (!Number.isSafeInteger(volumeBytes) || volumeBytes <= 0)) {
+    throw new Error("SPLIT_TARGET_SIZE_MB must be positive");
+  }
+  const staging = path.join(outputDir, "contents");
+  fs.mkdirSync(staging, { recursive: true });
+  // Keep the filename short enough for Telegram and common filesystems.
+  const safeName = Array.from(path.basename(name).replace(/[\\/:*?"<>|\x00-\x1f]/g, "_")).slice(0, 60).join("") || "archive";
+  const archive = path.resolve(outputDir, `${safeName}.zip`);
+  const entries = new Set<string>();
+  try {
+    for (const file of files) {
+      if (!fs.statSync(file).isFile()) throw new Error(`不是一般檔案: ${file}`);
+      const relative = path.relative(sourceRoot, file);
+      const entry = relative && !relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative)
+        ? relative : path.basename(file);
+      if (entries.has(entry)) throw new Error(`ZIP 內檔名重複: ${entry}`);
+      entries.add(entry);
+      const destination = path.join(staging, entry);
+      fs.mkdirSync(path.dirname(destination), { recursive: true });
+      try {
+        await fs.promises.link(file, destination);
+      } catch (err: any) {
+        if (err.code !== "EXDEV") throw err;
+        await fs.promises.copyFile(file, destination);
+      }
+    }
+    await run7z([
+      "a", "-tzip", "-mx=1", "-bd", "-y",
+      ...(volumeBytes === undefined ? [] : [`-v${volumeBytes}b`]), archive, ".",
+    ], staging);
+    let outputs = volumeBytes === undefined ? [archive] : fs.readdirSync(outputDir)
+      .filter((entry) => entry.startsWith(`${path.basename(archive)}.`) && /^\d+$/.test(entry.slice(path.basename(archive).length + 1)))
+      .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+      .map((entry) => path.join(outputDir, entry));
+    if (outputs.length === 0 || outputs.some((file) => volumeBytes !== undefined && fs.statSync(file).size > volumeBytes)) {
+      throw new Error("ZIP 分卷建立失敗。");
+    }
+    await run7z(["t", "-bd", path.resolve(outputs[0])], outputDir);
+    // A single volume is an ordinary ZIP; give it the conventional extension.
+    if (volumeBytes !== undefined && outputs.length === 1) {
+      fs.renameSync(outputs[0], archive);
+      outputs = [archive];
+    }
+    return outputs;
+  } finally {
+    fs.rmSync(staging, { recursive: true, force: true });
+  }
+}
+
 function run7z(args: string[], cwd: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const proc = spawn("7z", args, { cwd, stdio: ["ignore", "pipe", "pipe"] });

@@ -224,6 +224,9 @@ async function buildDetail(ctx: BotContext, type: string, id: string): Promise<D
       keyboard.text("📂 入庫", `lib:${id}`);
     }
     keyboard.row();
+    keyboard.text("ZIP → R2", `zip_r2:${id}`);
+    if (config.streamHost) keyboard.text("ZIP → TG (STREAM)", `zip_tg:${id}`);
+    keyboard.row();
     keyboard.text("📤 重傳", `reup:${id}`).text("🗑️ 刪除", `del:${id}`).row();
     keyboard.text("⬅️ 返回列表", "sb:");
     return { text, keyboard };

@@ -10,6 +10,9 @@ Telegram Bot 串接 qBittorrent，自動下載種子並上傳到 Telegram + Clou
 - R2 與 MoviePilot 入庫不做 2GB 分割
 - 上傳到指定群組，原訊息顯示檔案超連結清單
 - 可選上傳到 Cloudflare R2（24hr presigned URL）
+- 完成通知及 `/status` 任務詳情可選「ZIP → R2」或「ZIP → TG (STREAM)」，將同一任務處理後的檔案（含已封裝字幕的影片）一起打包；保留下載目錄結構，不更動原始檔案
+- ZIP → R2 上傳單一完整 `.zip`；ZIP → TG 依 `SPLIT_TARGET_SIZE_MB` 分卷（最多 1950 MiB），所有分卷成功後才提供 Stream 下載連結。下載全部 `.zip.001`、`.zip.002`… 至同一資料夾，用 7-Zip 開啟 `.zip.001` 解壓；ZIP 連結供下載，不能直接串流播放影片
+- ZIP → TG 需設定 `STREAM_HOST`；失敗可再次點選同一選項重試，成功後再次點選會取得已有連結。打包缺檔時會回報錯誤，不會靜默省略；R2 暫存 ZIP 上傳後清除，TG 暫存檔沿用定時清理
 - 可選上傳到 Filebin（免費空間）
 - 可選 Stream 直鏈（MTProto 即時串流，零本地快取）
 - 多影片自動產生 m3u8 播放列表
@@ -154,3 +157,7 @@ npm run dev
 ## License
 
 MIT
+
+### ZIP 打包測試
+
+本機需安裝 `7z`（Docker 映像已包含）。在 `bot/` 執行 `node --import tsx --test tests/zipper.test.ts`，驗證 ZIP／分卷解壓、路徑保留與錯誤處理。

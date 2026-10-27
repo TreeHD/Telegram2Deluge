@@ -1,6 +1,6 @@
 import { Api, InlineKeyboard } from "grammy";
 import { config, logger } from "../config.js";
-import { splitTo7z } from "./zipper.js";
+import { createZip, splitTo7z } from "./zipper.js";
 import { splitVideo } from "./ffmpeg.js";
 import { muxSubtitles } from "./mux.js";
 import { uploadToR2, getPresignedUrl } from "../storage/r2.js";
@@ -109,6 +109,8 @@ export class Pipeline {
       if (config.paths.library) {
         keyboard.text("📂 入庫", `lib:${job.id}`);
       }
+      keyboard.row().text("ZIP → R2", `zip_r2:${job.id}`);
+      if (config.streamHost) keyboard.text("ZIP → TG (STREAM)", `zip_tg:${job.id}`);
       keyboard.row().text("🗑️ 刪除原始檔", `del:${job.id}`);
 
       const text = `${escapeHtml(truncateFilename(job.name, 100))}\n\n✅ 處理完成 (${outputFiles.length} 個檔案)\n選擇後續動作：`;
@@ -140,6 +142,23 @@ export class Pipeline {
         logger.error(err, "Failed to edit status message");
       }
     });
+  }
+
+  async prepareZipForJob(jobId: string, telegram: boolean): Promise<TelegramUploadFiles> {
+    const pending = getPendingAction(jobId);
+    if (!pending) throw new Error("找不到待打包的檔案記錄。");
+    const files: string[] = JSON.parse(pending.files);
+    const job = getJobById(jobId);
+    fs.mkdirSync(config.paths.processing, { recursive: true });
+    const directory = fs.mkdtempSync(path.join(config.paths.processing, telegram ? "telegram-" : "zip-"));
+    try {
+      const outputs = await createZip(files, job?.name || jobId, job?.save_path || config.paths.downloads,
+        directory, telegram ? Math.min(config.split.targetSizeMb, 1950) : undefined);
+      return { files: outputs, temporaryFiles: outputs, groups: [outputs] };
+    } catch (err) {
+      fs.rmSync(directory, { recursive: true, force: true });
+      throw err;
+    }
   }
 
   async uploadToR2ForJob(jobId: string): Promise<string[]> {
