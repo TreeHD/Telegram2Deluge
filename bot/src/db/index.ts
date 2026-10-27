@@ -134,8 +134,8 @@ export function removePendingAction(jobId: string) {
   db.prepare("DELETE FROM pending_actions WHERE job_id = ?").run(jobId);
 }
 
-export function getJobById(jobId: string): { id: string; torrent_id: string; chat_id: number; message_id: number; name: string } | undefined {
-  return db.prepare("SELECT id, torrent_id, chat_id, message_id, name FROM pipeline_jobs WHERE id = ?").get(jobId) as any;
+export function getJobById(jobId: string): { id: string; torrent_id: string; chat_id: number; message_id: number; name: string; save_path: string } | undefined {
+  return db.prepare("SELECT id, torrent_id, chat_id, message_id, name, save_path FROM pipeline_jobs WHERE id = ?").get(jobId) as any;
 }
 
 export function getFailedJobs(): Array<{ id: string; torrent_id: string; chat_id: number; message_id: number; name: string; save_path: string; files: string; total_size: number }> {

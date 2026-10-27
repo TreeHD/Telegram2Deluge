@@ -12,6 +12,7 @@ import { escapeHtml } from "../utils/html.js";
 import { withRetry } from "../utils/retry.js";
 import { getJobById, removeTrackedTorrent, getStreamFiles, updateJobStatus, getPendingAction, addStreamFile, clearStreamFiles } from "../db/index.js";
 import { generateStreamUrl } from "../stream/index.js";
+import { uploadToR2, getPresignedUrl } from "../storage/r2.js";
 import { uploadToTelegram } from "../storage/telegram.js";
 import { copyToLibrary } from "../pipeline/library.js";
 import fs from "node:fs";
@@ -65,6 +66,8 @@ export function createBot(services: Services) {
   bot.command("list", handleStatus);
   bot.command("disk", handleDisk);
 
+  const archiveUploads = new Set<string>();
+
   bot.on("callback_query:data", async (ctx) => {
     const data = ctx.callbackQuery.data;
     const chatId = ctx.callbackQuery.message!.chat.id;
@@ -81,6 +84,75 @@ export function createBot(services: Services) {
       } else if (data === "sb:") {
         await ctx.answerCallbackQuery();
         await handleStatusBack(ctx);
+
+      } else if (data.startsWith("arc_r2:") || data.startsWith("arc_tg:")) {
+        const jobId = data.slice(7);
+        const telegram = data.startsWith("arc_tg:");
+        if (telegram && !config.streamHost) {
+          await ctx.answerCallbackQuery({ text: "尚未設定 STREAM_HOST。" });
+          return;
+        }
+        if (archiveUploads.has(jobId)) {
+          await ctx.answerCallbackQuery({ text: "此任務正在打包或上傳 7z，請稍候。" });
+          return;
+        }
+        await ctx.answerCallbackQuery({ text: "開始 7z 打包，完成後會通知你。" });
+        archiveUploads.add(jobId);
+        runInBackground(async () => {
+          let prepared: TelegramUploadFiles | undefined;
+          let telegramUploadStarted = false;
+          // 7z links must not replace the job's original Stream links.
+          const streamJobId = `7z:${jobId}`;
+          try {
+            let records = telegram ? getStreamFiles(streamJobId) : [];
+            const links: string[] = [];
+            if (records.length === 0) {
+              await sendMessage(bot.api, chatId, "📦 正在將任務檔案打包成 7z...");
+              prepared = await ctx.pipeline.prepareArchiveForJob(jobId, telegram);
+              if (telegram) {
+                const progress = await sendMessage(bot.api, chatId, `開始上傳 7z (${prepared.files.length} 檔) 到 Telegram...`);
+                telegramUploadStarted = true;
+                const result = await uploadTelegramGroups(bot.api, streamJobId, chatId,
+                  config.uploadChatId || chatId, progress.message_id, prepared);
+                if (result.failedGroups > 0) {
+                  throw new Error("7z 上傳未完成，未提供不完整的分卷連結；請再次選擇 7z → TG (STREAM) 重試。");
+                }
+                records = getStreamFiles(streamJobId);
+              } else {
+                const file = prepared.files[0];
+                const key = `${jobId}/7z/${path.basename(file)}`;
+                await uploadToR2(file, key);
+                links.push(`<a href="${escapeHtml(await getPresignedUrl(key))}">${escapeHtml(path.basename(file))}</a>`);
+              }
+            }
+            records.sort((a, b) => a.filename.localeCompare(b.filename, undefined, { numeric: true }));
+            links.push(...records.map((file) =>
+              `<a href="${escapeHtml(generateStreamUrl(file.message_id, file.filename))}">${escapeHtml(file.filename)}</a>`));
+            let text = telegram ? "7z Stream 下載連結：" : "7z R2 下載連結（簽名連結有效 24hr）：";
+            if (records.length > 1) text += "\n請下載全部 7z 分卷至同一資料夾，再用 7-Zip 開啟 .7z.001 解壓。";
+            for (const link of links) {
+              if (text.length + link.length + 1 > 4000) {
+                await sendMessage(bot.api, chatId, text);
+                text = "";
+              }
+              text += `${text ? "\n" : ""}${link}`;
+            }
+            await sendMessage(bot.api, chatId, text);
+          } catch (err) {
+            logger.error(err, "7z upload failed");
+            await sendMessage(bot.api, chatId, `7z 打包或上傳失敗：${escapeHtml(err instanceof Error ? err.message : String(err))}`);
+          } finally {
+            archiveUploads.delete(jobId);
+            if (prepared) {
+              if (telegramUploadStarted) {
+                // The local Bot API may still be reading files after a request times out.
+                ctx.pipeline.retainTelegramUploadFiles(prepared.temporaryFiles);
+              } else {
+                fs.rmSync(path.dirname(prepared.files[0]), { recursive: true, force: true });
+              }
+            }
+          }
+        }, "archive_upload");
 
       } else if (data.startsWith("r2_yes:")) {
         const jobId = data.slice(7);
@@ -412,6 +484,8 @@ export function createBot(services: Services) {
           if (config.paths.library) {
             keyboard.text("📂 入庫", `lib:${jobId}`);
           }
+          keyboard.row().text("7z → R2", `arc_r2:${jobId}`);
+          if (config.streamHost) keyboard.text("7z → TG (STREAM)", `arc_tg:${jobId}`);
           keyboard.row().text("🗑️ 刪除原始檔", `del:${jobId}`);
           const text =
             `<b>${escapeHtml(name.slice(0, 100))}</b>\n\n` +
