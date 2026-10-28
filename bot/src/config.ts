@@ -50,6 +50,7 @@ export const config = {
   cleanup: {
     maxAgeHours: parseInt(optional("CLEANUP_MAX_AGE_HOURS", "72"), 10),
     intervalMinutes: parseInt(optional("CLEANUP_INTERVAL_MINUTES", "5"), 10),
+    processingDelayMinutes: parseFloat(optional("PROCESSING_CLEANUP_DELAY_MINUTES", "5")),
   },
 
   split: {

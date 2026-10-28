@@ -12,7 +12,7 @@ Telegram Bot 串接 qBittorrent，自動下載種子並上傳到 Telegram + Clou
 - 可選上傳到 Cloudflare R2（24hr presigned URL）
 - 完成通知及 `/status` 任務詳情可選「7z → R2」或「7z → TG (STREAM)」，將同一任務處理後的檔案（含已封裝字幕的影片）以 LZMA2 極致壓縮（`-mx=9`）一起打包；保留下載目錄結構，不更動原始檔案
 - 7z → R2 上傳單一完整 `.7z`；7z → TG 依 `SPLIT_TARGET_SIZE_MB` 分卷（最多 1950 MiB），所有分卷成功後才提供 Stream 下載連結。下載全部 `.7z.001`、`.7z.002`… 至同一資料夾，用 7-Zip 開啟 `.7z.001` 解壓；7z 連結供下載，不能直接串流播放影片
-- 7z → TG 需設定 `STREAM_HOST`；失敗可再次點選同一選項重試，成功後再次點選會取得已有連結。打包缺檔時會回報錯誤，不會靜默省略；R2 暫存 7z 上傳後清除，TG 暫存檔沿用定時清理
+- 7z → TG 需設定 `STREAM_HOST`；失敗可再次點選同一選項重試，成功後再次點選會取得已有連結。打包缺檔時會回報錯誤，不會靜默省略；R2、TG 上傳與 7z 暫存檔在作業結束後預設 5 分鐘清除；Bot 重啟時清空 `/processing`，並重新排入依賴該目錄的待操作任務
 - 可選上傳到 Filebin（免費空間）
 - 可選 Stream 直鏈（MTProto 即時串流，零本地快取）
 - 多影片自動產生 m3u8 播放列表
@@ -21,7 +21,7 @@ Telegram Bot 串接 qBittorrent，自動下載種子並上傳到 Telegram + Clou
 - `/list` 互動式任務列表（點按查看詳情/操作）
 - `/disk` 查看磁碟剩餘空間
 - 每日自動更新 tracker 列表
-- 檔案 / qB 任務預設閒置超過 3 天自動清理
+- 下載檔案 / qB 任務預設超過 3 天自動清理；上傳暫存檔在作業結束後預設 5 分鐘清理，重啟時清空 `/processing`
 - MoviePilot 入庫空間不足時改採逐檔搬入，待上一個檔案被取走後再繼續
 - 可選 WireGuard VPN（僅 qB 流量走 VPN tunnel）
 
@@ -138,6 +138,7 @@ docker compose -f docker-compose.yml -f docker-compose.vpn.yml up -d
 | `SPLIT_TARGET_SIZE_MB` | Stream 直鏈上傳分割大小上限（預設 `1950` MiB） |
 | `CLEANUP_MAX_AGE_HOURS` | 下載與處理目錄檔案自動清理時間（預設 `72` 小時／3 天） |
 | `CLEANUP_INTERVAL_MINUTES` | 清理檢查間隔（預設 `5` 分鐘） |
+| `PROCESSING_CLEANUP_DELAY_MINUTES` | 上傳暫存檔延遲清除時間（預設 `5` 分鐘）；Bot 重啟時立即清空 `/processing` |
 
 ## R2 設定
 
