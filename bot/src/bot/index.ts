@@ -100,7 +100,6 @@ export function createBot(services: Services) {
         archiveUploads.add(jobId);
         runInBackground(async () => {
           let prepared: TelegramUploadFiles | undefined;
-          let telegramUploadStarted = false;
           // 7z links must not replace the job's original Stream links.
           const streamJobId = `7z:${jobId}`;
           try {
@@ -111,7 +110,6 @@ export function createBot(services: Services) {
               prepared = await ctx.pipeline.prepareArchiveForJob(jobId, telegram);
               if (telegram) {
                 const progress = await sendMessage(bot.api, chatId, `開始上傳 7z (${prepared.files.length} 檔) 到 Telegram...`);
-                telegramUploadStarted = true;
                 const result = await uploadTelegramGroups(bot.api, streamJobId, chatId,
                   config.uploadChatId || chatId, progress.message_id, prepared);
                 if (result.failedGroups > 0) {
@@ -144,12 +142,8 @@ export function createBot(services: Services) {
           } finally {
             archiveUploads.delete(jobId);
             if (prepared) {
-              if (telegramUploadStarted) {
-                // The local Bot API may still be reading files after a request times out.
-                ctx.pipeline.retainTelegramUploadFiles(prepared.temporaryFiles);
-              } else {
-                fs.rmSync(path.dirname(prepared.files[0]), { recursive: true, force: true });
-              }
+              // Delay cleanup because the local Bot API may still be reading after a timeout.
+              ctx.pipeline.scheduleProcessingCleanup(prepared.temporaryFiles);
             }
           }
         }, "archive_upload");
@@ -225,15 +219,14 @@ export function createBot(services: Services) {
             }
 
             const uploadChatId = config.uploadChatId || chatId;
-            const progressMessage = await sendMessage(bot.api, chatId, `開始上傳 ${telegramFiles.files.length} 個檔案到 Telegram...`);
-
             let failedGroups = 0;
             try {
+              const progressMessage = await sendMessage(bot.api, chatId, `開始上傳 ${telegramFiles.files.length} 個檔案到 Telegram...`);
               ({ failedGroups } = await uploadTelegramGroups(
                 bot.api, jobId, chatId, uploadChatId, progressMessage.message_id, telegramFiles,
               ));
             } finally {
-              ctx.pipeline.retainTelegramUploadFiles(telegramFiles.temporaryFiles);
+              ctx.pipeline.scheduleProcessingCleanup(telegramFiles.temporaryFiles);
             }
 
             if (failedGroups > 0) {
@@ -347,13 +340,13 @@ export function createBot(services: Services) {
           const uploadChatId = config.uploadChatId || chatId;
           let uploaded = 0;
           let failedGroups = 0;
-          const progressMessage = await sendMessage(bot.api, chatId, `開始重新上傳 ${telegramFiles.files.length} 個檔案到 Telegram...`);
           try {
+            const progressMessage = await sendMessage(bot.api, chatId, `開始重新上傳 ${telegramFiles.files.length} 個檔案到 Telegram...`);
             ({ uploaded, failedGroups } = await uploadTelegramGroups(
               bot.api, jobId, chatId, uploadChatId, progressMessage.message_id, telegramFiles,
             ));
           } finally {
-            ctx.pipeline.retainTelegramUploadFiles(telegramFiles.temporaryFiles);
+            ctx.pipeline.scheduleProcessingCleanup(telegramFiles.temporaryFiles);
           }
 
           if (failedGroups > 0) {

@@ -2,8 +2,50 @@ import fs from "node:fs";
 import path from "node:path";
 import { config, logger } from "../config.js";
 import { QBClient } from "../qb/client.js";
+import { getAllPendingActions, removePendingAction, updateJobStatus } from "../db/index.js";
 
 let qbClient: QBClient | null = null;
+
+/** Drop old /processing artifacts, and requeue actions that need regenerated mux outputs. */
+export function clearProcessingOnStartup() {
+  const processingDir = path.resolve(config.paths.processing);
+  const protectedPaths = [config.paths.downloads, config.paths.queue, config.paths.library]
+    .filter((value) => value.length > 0).map((value) => path.resolve(value));
+  if (processingDir === path.parse(processingDir).root ||
+      protectedPaths.some((protectedPath) =>
+        protectedPath === processingDir || protectedPath.startsWith(`${processingDir}${path.sep}`))) {
+    throw new Error(`Unsafe PROCESSING_DIR for startup cleanup: ${processingDir}`);
+  }
+  if (fs.lstatSync(processingDir).isSymbolicLink()) {
+    throw new Error(`PROCESSING_DIR must not be a symlink: ${processingDir}`);
+  }
+
+  let requeued = 0;
+  for (const pending of getAllPendingActions()) {
+    let files: unknown;
+    try {
+      files = JSON.parse(pending.files);
+    } catch (err) {
+      logger.error({ err, jobId: pending.job_id }, "Invalid pending action file list");
+      continue;
+    }
+    if (!Array.isArray(files) || !files.some((file) =>
+      typeof file === "string" &&
+      path.resolve(file).startsWith(`${processingDir}${path.sep}`))) {
+      continue;
+    }
+    removePendingAction(pending.job_id);
+    updateJobStatus(pending.job_id, "pending");
+    requeued++;
+  }
+
+  let removed = 0;
+  for (const entry of fs.readdirSync(processingDir)) {
+    fs.rmSync(path.join(processingDir, entry), { recursive: true, force: true });
+    removed++;
+  }
+  logger.info({ processingDir, removed, requeued }, "Cleared processing directory on startup");
+}
 
 export function startCleanupScheduler(qb: QBClient) {
   qbClient = qb;
