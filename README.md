@@ -84,6 +84,20 @@ CLOUDFLARED_TOKEN=your-token docker compose -f docker-compose.stream.yml --profi
 
 `STREAM_HOST` 設為 tunnel domain（如 `https://stream.yourdomain.com`）。
 
+### Stream CORS（跨網域播放）
+
+如需從不同網域的網頁播放器存取 Stream，請在根目錄的 `.env` 設定：
+
+```dotenv
+STREAM_CORS_ORIGINS=https://player.example.com,http://localhost:3000
+```
+
+可使用逗號分隔多個 Origin（包含協定與埠號，不加結尾斜線）。伺服器僅對清單中的 Origin 回傳 `Access-Control-Allow-Origin`，支援 `GET`、`HEAD` 及 `OPTIONS` 預檢、`Range` 請求，並讓前端讀取 `Content-Range` 等串流回應標頭。
+
+未設定或留空時不啟用 CORS；設為 `*` 可允許任何 Origin（不支援 Credentialed CORS），但建議優先指定可信任的網域。**CORS 不取代 Stream URL 的 HMAC 簽章驗證**。
+
+一般部署的 stream 服務會透過 `env_file: .env` 讀取此變數；獨立部署使用 `docker-compose.stream.yml` 時也會從 `.env` 傳入。
+
 ## VPN 模式（可選）
 
 只讓 qBittorrent 走 WireGuard VPN tunnel，bot 和 telegram-bot-api 走正常網路。
@@ -134,6 +148,7 @@ docker compose -f docker-compose.yml -f docker-compose.vpn.yml up -d
 | `LIBRARY_PATH` | MoviePilot 入庫監控目錄（選填） |
 | `STREAM_HOST` | Stream server 公開 URL（如 `http://ip:8082`） |
 | `STREAM_SECRET` | Stream URL 簽名密鑰（bot 與 stream 共用） |
+| `STREAM_CORS_ORIGINS` | Stream 允許跨域的 Origin，逗號分隔多筆；預設不啟用，`*` 表示允許全部 |
 | `STREAM_API_KEY` | Stream API key（選填） |
 | `SPLIT_TARGET_SIZE_MB` | Stream 直鏈上傳分割大小上限（預設 `1950` MiB） |
 | `CLEANUP_MAX_AGE_HOURS` | 下載與處理目錄檔案自動清理時間（預設 `72` 小時／3 天） |
