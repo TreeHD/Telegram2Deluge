@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"tg-stream/internal/config"
+	"tg-stream/internal/cors"
 	"tg-stream/internal/stream"
 )
 
@@ -35,7 +36,7 @@ func main() {
 	log.Printf("Worker pool ready (%d workers)", pool.Size())
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/stream/", handleStream)
+	mux.Handle("/stream/", cors.Middleware(cfg.CORSOrigins, http.HandlerFunc(handleStream)))
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ok"))

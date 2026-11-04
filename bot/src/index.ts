@@ -4,7 +4,7 @@ import { QBClient } from "./qb/client.js";
 import { startTrackerUpdater } from "./qb/trackers.js";
 import { DownloadMonitor } from "./monitor/index.js";
 import { Pipeline } from "./pipeline/index.js";
-import { startCleanupScheduler } from "./cleanup/index.js";
+import { startCleanupScheduler, clearProcessingOnStartup } from "./cleanup/index.js";
 import fs from "node:fs";
 
 process.on("unhandledRejection", (err) => {
@@ -33,6 +33,8 @@ async function main() {
   for (const dir of [config.paths.downloads, config.paths.processing, config.paths.queue]) {
     fs.mkdirSync(dir, { recursive: true });
   }
+
+  clearProcessingOnStartup();
 
   const qb = new QBClient(config.qb);
   await connectWithRetry(qb);

@@ -1,6 +1,6 @@
 import { Api, InlineKeyboard } from "grammy";
 import { config, logger } from "../config.js";
-import { splitTo7z } from "./zipper.js";
+import { create7zArchive, splitTo7z } from "./zipper.js";
 import { splitVideo } from "./ffmpeg.js";
 import { muxSubtitles } from "./mux.js";
 import { uploadToR2, getPresignedUrl } from "../storage/r2.js";
@@ -110,6 +110,8 @@ export class Pipeline {
       if (isNetoroEnabled()) {
         keyboard.text("📂 入庫", `lib:${job.id}`);
       }
+      keyboard.row().text("7z → R2", `arc_r2:${job.id}`);
+      if (config.streamHost) keyboard.text("7z → TG (STREAM)", `arc_tg:${job.id}`);
       keyboard.row().text("🗑️ 刪除原始檔", `del:${job.id}`);
 
       const text = `${escapeHtml(truncateFilename(job.name, 100))}\n\n✅ 處理完成 (${outputFiles.length} 個檔案)\n選擇後續動作：`;
@@ -143,6 +145,23 @@ export class Pipeline {
     });
   }
 
+  async prepareArchiveForJob(jobId: string, telegram: boolean): Promise<TelegramUploadFiles> {
+    const pending = getPendingAction(jobId);
+    if (!pending) throw new Error("找不到待打包的檔案記錄。");
+    const files: string[] = JSON.parse(pending.files);
+    const job = getJobById(jobId);
+    fs.mkdirSync(config.paths.processing, { recursive: true });
+    const directory = fs.mkdtempSync(path.join(config.paths.processing, telegram ? "telegram-" : "archive-"));
+    try {
+      const outputs = await create7zArchive(files, job?.name || jobId, job?.save_path || config.paths.downloads,
+        directory, telegram ? Math.min(config.split.targetSizeMb, 1950) : undefined);
+      return { files: outputs, temporaryFiles: outputs, groups: [outputs] };
+    } catch (err) {
+      fs.rmSync(directory, { recursive: true, force: true });
+      throw err;
+    }
+  }
+
   async uploadToR2ForJob(jobId: string): Promise<string[]> {
     const pending = getPendingAction(jobId);
     if (!pending) return [];
@@ -164,11 +183,17 @@ export class Pipeline {
     const m3u8Content = generateM3u8(results);
     if (m3u8Content) {
       const m3u8Key = `${jobId}/playlist.m3u8`;
-      const m3u8Path = path.join(config.paths.processing, `${jobId}-playlist.m3u8`);
-      fs.writeFileSync(m3u8Path, m3u8Content);
-      await uploadToR2(m3u8Path, m3u8Key);
-      const m3u8Url = await getPresignedUrl(m3u8Key);
-      urls.push(`<a href="${escapeHref(m3u8Url)}">📋 playlist.m3u8</a>`);
+      fs.mkdirSync(config.paths.processing, { recursive: true });
+      const playlistDir = fs.mkdtempSync(path.join(config.paths.processing, "playlist-"));
+      const m3u8Path = path.join(playlistDir, "playlist.m3u8");
+      try {
+        fs.writeFileSync(m3u8Path, m3u8Content);
+        await uploadToR2(m3u8Path, m3u8Key);
+        const m3u8Url = await getPresignedUrl(m3u8Key);
+        urls.push(`<a href="${escapeHref(m3u8Url)}">📋 playlist.m3u8</a>`);
+      } finally {
+        this.scheduleProcessingCleanup([m3u8Path]);
+      }
     }
 
     return urls;
@@ -201,13 +226,18 @@ export class Pipeline {
 
     const m3u8Content = generateM3u8(videoEntries);
     if (m3u8Content) {
-      const m3u8Path = path.join(config.paths.processing, `${jobId}-playlist.m3u8`);
-      fs.writeFileSync(m3u8Path, m3u8Content);
-      const result = await uploadToFilebin(m3u8Path, binId);
-      if (result) {
-        links.push(`<a href="${escapeHref(result.url)}">📋 playlist.m3u8</a>`);
+      fs.mkdirSync(config.paths.processing, { recursive: true });
+      const playlistDir = fs.mkdtempSync(path.join(config.paths.processing, "playlist-"));
+      const m3u8Path = path.join(playlistDir, "playlist.m3u8");
+      try {
+        fs.writeFileSync(m3u8Path, m3u8Content);
+        const result = await uploadToFilebin(m3u8Path, binId);
+        if (result) {
+          links.push(`<a href="${escapeHref(result.url)}">📋 playlist.m3u8</a>`);
+        }
+      } finally {
+        this.scheduleProcessingCleanup([m3u8Path]);
       }
-      try { fs.unlinkSync(m3u8Path); } catch {}
     }
 
     return { links, skipped, binUrl: getFilebinBinUrl(binId) };
@@ -267,15 +297,29 @@ export class Pipeline {
     return { files: uploadFiles, temporaryFiles, groups };
   }
 
-  retainTelegramUploadFiles(files: string[]) {
+  /** Delayed cleanup avoids deleting a file still being read after a Bot API timeout. */
+  scheduleProcessingCleanup(files: string[]) {
     const processingDir = path.resolve(config.paths.processing);
-    const directories = new Set(files.map((file) => path.dirname(file)));
-    const now = new Date();
+    const directories = new Set(files.map((file) => path.dirname(path.resolve(file))));
+    const delayMinutes = config.cleanup.processingDelayMinutes;
+    const delayMs = delayMinutes * 60_000;
+    if (!Number.isFinite(delayMs) || delayMs < 0) {
+      throw new Error("PROCESSING_CLEANUP_DELAY_MINUTES must be non-negative");
+    }
     for (const directory of directories) {
-      if (path.dirname(path.resolve(directory)) !== processingDir || !path.basename(directory).startsWith("telegram-")) {
+      if (path.dirname(directory) !== processingDir ||
+          !/^(telegram|archive|playlist)-/.test(path.basename(directory))) {
         continue;
       }
-      try { fs.utimesSync(directory, now, now); } catch {}
+      setTimeout(() => {
+        try {
+          fs.rmSync(directory, { recursive: true, force: true });
+          logger.info({ directory }, "Removed upload temporary files");
+        } catch (err) {
+          logger.error({ err, directory }, "Failed to remove upload temporary files");
+        }
+      }, delayMs).unref();
+      logger.info({ directory, delayMinutes }, "Scheduled upload temporary file cleanup");
     }
   }
 

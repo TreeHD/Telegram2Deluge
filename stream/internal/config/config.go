@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"strconv"
+	"strings"
 )
 
 type Config struct {
@@ -15,6 +16,7 @@ type Config struct {
 	Workers              int
 	UploadChat           int64
 	UploadChatAccessHash int64
+	CORSOrigins          []string
 }
 
 func Load() *Config {
@@ -34,7 +36,22 @@ func Load() *Config {
 		Workers:              workers,
 		UploadChat:           uploadChat,
 		UploadChatAccessHash: uploadChatAccessHash,
+		CORSOrigins:          parseOrigins(getEnv("STREAM_CORS_ORIGINS", "")),
 	}
+}
+
+func parseOrigins(value string) []string {
+	var origins []string
+	seen := make(map[string]bool)
+	for _, origin := range strings.Split(value, ",") {
+		origin = strings.TrimSpace(origin)
+		if origin == "" || seen[origin] {
+			continue
+		}
+		seen[origin] = true
+		origins = append(origins, origin)
+	}
+	return origins
 }
 
 func getEnv(key, fallback string) string {

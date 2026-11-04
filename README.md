@@ -6,10 +6,13 @@ Telegram Bot 串接 qBittorrent，自動下載種子並上傳到 Telegram + Clou
 
 - 傳送 `.torrent` 檔案、磁力鏈結或 URL 給 Bot，自動加入 qBittorrent 下載
 - 下載進度即時更新（每 15 秒編輯訊息 + 進度條）
-- 僅在選擇 Stream 直鏈時，超過上傳上限的影片用 ffmpeg 分片，其餘檔案建立 7z 分卷；下載全部分卷後開啟 `.7z.001` 解壓
+- 僅在選擇 Stream 直鏈時，超過上傳上限的影片用 ffmpeg 分片，其餘檔案以 LZMA2 極致壓縮（`-mx=9`）建立 7z 分卷；下載全部分卷後開啟 `.7z.001` 解壓
 - R2 不做 2GB 分割
 - 上傳到指定群組，原訊息顯示檔案超連結清單
 - 可選上傳到 Cloudflare R2（24hr presigned URL）
+- 完成通知及 `/status` 任務詳情可選「7z → R2」或「7z → TG (STREAM)」，將同一任務處理後的檔案（含已封裝字幕的影片）以 LZMA2 極致壓縮（`-mx=9`）一起打包；保留下載目錄結構，不更動原始檔案
+- 7z → R2 上傳單一完整 `.7z`；7z → TG 依 `SPLIT_TARGET_SIZE_MB` 分卷（最多 1950 MiB），所有分卷成功後才提供 Stream 下載連結。下載全部 `.7z.001`、`.7z.002`… 至同一資料夾，用 7-Zip 開啟 `.7z.001` 解壓；7z 連結供下載，不能直接串流播放影片
+- 7z → TG 需設定 `STREAM_HOST`；失敗可再次點選同一選項重試，成功後再次點選會取得已有連結。打包缺檔時會回報錯誤，不會靜默省略；R2、TG 上傳與 7z 暫存檔在作業結束後預設 5 分鐘清除；Bot 重啟時清空 `/processing`，並重新排入依賴該目錄的待操作任務
 - 可選上傳到 Filebin（免費空間）
 - 可選 Stream 直鏈（MTProto 即時串流，零本地快取）
 - 多影片自動產生 m3u8 播放列表
@@ -18,7 +21,7 @@ Telegram Bot 串接 qBittorrent，自動下載種子並上傳到 Telegram + Clou
 - `/list` 互動式任務列表（點按查看詳情/操作）
 - `/disk` 查看磁碟剩餘空間
 - 每日自動更新 tracker 列表
-- 檔案 / qB 任務預設閒置超過 3 天自動清理
+- 下載檔案 / qB 任務預設超過 3 天自動清理；上傳暫存檔在作業結束後預設 5 分鐘清理，重啟時清空 `/processing`
 - 入庫：將 Stream 直鏈 m3u8 上傳到 Netoro（需設定 `NETORO_URL`、`NETORO_TOKEN` 與 `STREAM_HOST`）
 - 可選 WireGuard 或 IKEv2/IPsec VPN（僅 qB 流量走 VPN tunnel）
 
@@ -80,6 +83,20 @@ CLOUDFLARED_TOKEN=your-token docker compose -f docker-compose.stream.yml --profi
 ```
 
 `STREAM_HOST` 設為 tunnel domain（如 `https://stream.yourdomain.com`）。
+
+### Stream CORS（跨網域播放）
+
+如需從不同網域的網頁播放器存取 Stream，請在根目錄的 `.env` 設定：
+
+```dotenv
+STREAM_CORS_ORIGINS=https://player.example.com,http://localhost:3000
+```
+
+可使用逗號分隔多個 Origin（包含協定與埠號，不加結尾斜線）。伺服器僅對清單中的 Origin 回傳 `Access-Control-Allow-Origin`，支援 `GET`、`HEAD` 及 `OPTIONS` 預檢、`Range` 請求，並讓前端讀取 `Content-Range` 等串流回應標頭。
+
+未設定或留空時不啟用 CORS；設為 `*` 可允許任何 Origin（不支援 Credentialed CORS），但建議優先指定可信任的網域。**CORS 不取代 Stream URL 的 HMAC 簽章驗證**。
+
+一般部署的 stream 服務會透過 `env_file: .env` 讀取此變數；獨立部署使用 `docker-compose.stream.yml` 時也會從 `.env` 傳入。
 
 ## VPN 模式（可選）
 
@@ -155,10 +172,12 @@ docker compose -f docker-compose.yml -f docker-compose.ikev2.yml ps
 | `NETORO_TOKEN` | Netoro `UPLOAD_TOKEN` |
 | `STREAM_HOST` | Stream server 公開 URL（如 `http://ip:8082`） |
 | `STREAM_SECRET` | Stream URL 簽名密鑰（bot 與 stream 共用） |
+| `STREAM_CORS_ORIGINS` | Stream 允許跨域的 Origin，逗號分隔多筆；預設不啟用，`*` 表示允許全部 |
 | `STREAM_API_KEY` | Stream API key（選填） |
 | `SPLIT_TARGET_SIZE_MB` | Stream 直鏈上傳分割大小上限（預設 `1950` MiB） |
 | `CLEANUP_MAX_AGE_HOURS` | 下載與處理目錄檔案自動清理時間（預設 `72` 小時／3 天） |
 | `CLEANUP_INTERVAL_MINUTES` | 清理檢查間隔（預設 `5` 分鐘） |
+| `PROCESSING_CLEANUP_DELAY_MINUTES` | 上傳暫存檔延遲清除時間（預設 `5` 分鐘）；Bot 重啟時立即清空 `/processing` |
 
 ## R2 設定
 
@@ -178,3 +197,7 @@ npm run dev
 ## License
 
 MIT
+
+### 7z 打包測試
+
+本機需安裝 `7z`（Docker 映像已包含）。在 `bot/` 執行 `node --import tsx --test tests/zipper.test.ts`，驗證 7z／分卷解壓、路徑保留與錯誤處理。
