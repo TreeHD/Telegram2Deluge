@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
 import fs from "node:fs";
+import readline from "node:readline";
 import { config, logger } from "../config.js";
 
 export async function splitVideo(inputPath: string, targetSizeMb: number, outputDir = config.paths.processing): Promise<string[]> {
@@ -11,14 +12,15 @@ export async function splitVideo(inputPath: string, targetSizeMb: number, output
   const targetBytes = Math.floor(targetSizeMb * 1024 * 1024);
   if (targetBytes <= 0) throw new Error("SPLIT_TARGET_SIZE_MB must be positive");
 
-  const duration = await getVideoDuration(inputPath);
+  const { duration, startTime } = await getVideoInfo(inputPath);
   if (!Number.isFinite(duration) || duration <= 0) {
     throw new Error(`Cannot determine video duration for ${inputPath}`);
   }
 
   const fileSize = fs.statSync(inputPath).size;
-  const numParts = Math.ceil(fileSize / targetBytes);
-  let segmentDuration = Math.max(0.1, duration / numParts * 0.9);
+  const keyframes = await getKeyframes(inputPath);
+  // Leave a little room: remuxed parts are not byte-identical to the source ranges.
+  let limitBytes = targetBytes * 0.97;
 
   const outputPattern = path.join(outputDir, `${basename}.part%03d${ext}`);
   const partPrefix = `${basename}.part`;
@@ -33,13 +35,14 @@ export async function splitVideo(inputPath: string, targetSizeMb: number, output
 
   removeParts(getParts());
   for (let attempt = 0; attempt < 4; attempt++) {
+    const cuts = planCuts(keyframes, fileSize, limitBytes, startTime, duration);
     try {
       await runFfmpeg([
         "-y", "-i", inputPath,
         "-c", "copy",
         "-map", "0",
         "-f", "segment",
-        "-segment_time", `${segmentDuration}`,
+        "-segment_times", cuts.map((t) => t.toFixed(3)).join(","),
         "-reset_timestamps", "1",
         outputPattern,
       ]);
@@ -53,7 +56,7 @@ export async function splitVideo(inputPath: string, targetSizeMb: number, output
     const sizes = parts.map((part) => fs.statSync(part).size);
     const largest = Math.max(...sizes);
     if (sizes.every((size) => size > 0 && size <= targetBytes)) {
-      logger.info({ inputPath, parts: parts.length, segmentDuration }, "Video split into segments");
+      logger.info({ inputPath, parts: parts.length, sizes }, "Video split into segments");
       return parts;
     }
 
@@ -61,14 +64,84 @@ export async function splitVideo(inputPath: string, targetSizeMb: number, output
     if (attempt === 3) {
       throw new Error(`FFmpeg could not split ${inputPath} into segments below ${targetBytes} bytes`);
     }
-    segmentDuration = Math.max(0.1, Math.min(segmentDuration * 0.75, segmentDuration * targetBytes / largest * 0.8));
-    logger.warn({ inputPath, segmentDuration, largest }, "Retrying oversized video segments");
+    limitBytes = Math.min(limitBytes * 0.9, limitBytes * targetBytes / largest * 0.95);
+    logger.warn({ inputPath, limitBytes, largest }, "Retrying oversized video segments");
   }
 
   throw new Error(`FFmpeg could not split ${inputPath}`);
 }
 
-function getVideoDuration(filePath: string): Promise<number> {
+interface Keyframe {
+  time: number;
+  pos: number;
+}
+
+/**
+ * Pick cut times so each part covers at most `limitBytes` of the source file.
+ * Cuts land on keyframes, which is where `-c copy` segmenting can split.
+ */
+function planCuts(keyframes: Keyframe[], fileSize: number, limitBytes: number, startTime: number, duration: number): number[] {
+  const cuts: number[] = [];
+  if (keyframes.length > 1) {
+    let segmentStart = keyframes[0].pos;
+    let previous = keyframes[0];
+    // The end of the file acts as a final boundary so the last part is checked too.
+    for (const keyframe of [...keyframes.slice(1), { time: Infinity, pos: fileSize }]) {
+      if (keyframe.pos - segmentStart > limitBytes && previous.pos > segmentStart) {
+        // Step back slightly so rounding cannot push the cut to the next keyframe.
+        cuts.push(previous.time - startTime - 0.001);
+        segmentStart = previous.pos;
+      }
+      previous = keyframe;
+    }
+  }
+  if (cuts.length > 0) return cuts;
+
+  // No usable keyframe positions: fall back to equal-length cuts.
+  const numParts = Math.max(2, Math.ceil(fileSize / limitBytes));
+  for (let i = 1; i < numParts; i++) cuts.push(duration * i / numParts);
+  return cuts;
+}
+
+/** Byte offsets and timestamps of the main video stream's keyframes. */
+async function getKeyframes(filePath: string): Promise<Keyframe[]> {
+  const proc = spawn("ffprobe", [
+    "-v", "error",
+    "-select_streams", "V:0",
+    "-show_entries", "packet=pts_time,pos,flags",
+    "-of", "compact=p=0",
+    filePath,
+  ], { stdio: ["ignore", "pipe", "ignore"] });
+
+  const keyframes: Keyframe[] = [];
+  const lines = readline.createInterface({ input: proc.stdout });
+  lines.on("line", (line) => {
+    const fields: Record<string, string> = {};
+    for (const entry of line.split("|")) {
+      const eq = entry.indexOf("=");
+      if (eq > 0) fields[entry.slice(0, eq)] = entry.slice(eq + 1);
+    }
+    if (!fields.flags?.includes("K")) return;
+    const time = parseFloat(fields.pts_time);
+    const pos = parseInt(fields.pos, 10);
+    if (Number.isFinite(time) && Number.isFinite(pos)) keyframes.push({ time, pos });
+  });
+
+  const [code] = await Promise.all([
+    new Promise<number | null>((resolve) => {
+      proc.on("close", resolve);
+      proc.on("error", () => resolve(null));
+    }),
+    new Promise<void>((resolve) => lines.on("close", resolve)),
+  ]);
+  if (code !== 0) {
+    logger.warn({ filePath, code }, "ffprobe could not list keyframes; using equal-length cuts");
+    return [];
+  }
+  return keyframes.sort((a, b) => a.time - b.time);
+}
+
+function getVideoInfo(filePath: string): Promise<{ duration: number; startTime: number }> {
   return new Promise((resolve) => {
     const proc = spawn("ffprobe", [
       "-v", "quiet",
@@ -78,17 +151,22 @@ function getVideoDuration(filePath: string): Promise<number> {
     ]);
 
     let output = "";
+    const fail = { duration: 0, startTime: 0 };
     proc.stdout.on("data", (data) => { output += data; });
     proc.on("close", (code) => {
-      if (code !== 0) return resolve(0);
+      if (code !== 0) return resolve(fail);
       try {
         const info = JSON.parse(output);
-        resolve(parseFloat(info.format?.duration || "0"));
+        const startTime = parseFloat(info.format?.start_time || "0");
+        resolve({
+          duration: parseFloat(info.format?.duration || "0"),
+          startTime: Number.isFinite(startTime) ? startTime : 0,
+        });
       } catch {
-        resolve(0);
+        resolve(fail);
       }
     });
-    proc.on("error", () => resolve(0));
+    proc.on("error", () => resolve(fail));
   });
 }
 
