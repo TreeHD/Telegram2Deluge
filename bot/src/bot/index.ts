@@ -13,7 +13,7 @@ import { withRetry } from "../utils/retry.js";
 import { getJobById, removeTrackedTorrent, getStreamFiles, updateJobStatus, getPendingAction, addStreamFile, clearStreamFiles } from "../db/index.js";
 import { generateStreamUrl } from "../stream/index.js";
 import { uploadToTelegram } from "../storage/telegram.js";
-import { copyToLibrary } from "../pipeline/library.js";
+import { isNetoroEnabled, uploadM3u8ToNetoro } from "../netoro/index.js";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -130,49 +130,8 @@ export function createBot(services: Services) {
         await ctx.answerCallbackQuery({ text: "上傳到 Telegram 中..." });
 
         runInBackground(async () => {
-          let files = getStreamFiles(jobId);
-
-          // Upload to Telegram if not yet uploaded
-          if (files.length === 0) {
-            const pending = getPendingAction(jobId);
-            if (!pending) {
-              await sendMessage(bot.api, chatId, "找不到待上傳的檔案記錄。");
-              return;
-            }
-            const pendingFiles: string[] = JSON.parse(pending.files);
-            const existingFiles = pendingFiles.filter((f) => fs.existsSync(f));
-            if (existingFiles.length === 0) {
-              await sendMessage(bot.api, chatId, "原始檔案已不存在。");
-              return;
-            }
-
-            const telegramFiles = await ctx.pipeline.prepareFilesForTelegramUpload(existingFiles);
-            if (telegramFiles.files.length === 0) {
-              await sendMessage(bot.api, chatId, "沒有可上傳的檔案。");
-              return;
-            }
-
-            const uploadChatId = config.uploadChatId || chatId;
-            const progressMessage = await sendMessage(bot.api, chatId, `開始上傳 ${telegramFiles.files.length} 個檔案到 Telegram...`);
-
-            let failedGroups = 0;
-            try {
-              ({ failedGroups } = await uploadTelegramGroups(
-                bot.api, jobId, chatId, uploadChatId, progressMessage.message_id, telegramFiles,
-              ));
-            } finally {
-              ctx.pipeline.retainTelegramUploadFiles(telegramFiles.temporaryFiles);
-            }
-
-            if (failedGroups > 0) {
-              await sendMessage(bot.api, chatId, `⚠️ ${failedGroups} 組檔案上傳失敗，未提供不完整的分卷連結。可到 /status 選擇「重傳」。`);
-            }
-            files = getStreamFiles(jobId);
-            if (files.length === 0) {
-              await sendMessage(bot.api, chatId, "所有檔案上傳失敗，請查看 log。");
-              return;
-            }
-          }
+          const files = await ensureStreamFiles(bot.api, ctx.pipeline, jobId, chatId);
+          if (!files) return;
 
           files.sort((a, b) => a.filename.localeCompare(b.filename, undefined, { numeric: true }));
 
@@ -333,26 +292,30 @@ export function createBot(services: Services) {
         await ctx.answerCallbackQuery({ text: "入庫中..." });
 
         runInBackground(async () => {
-          const result = await copyToLibrary(jobId);
-          let text = "";
-          if (result.error) {
-            text = `入庫失敗: ${result.error}`;
-            if (result.copied.length > 0) {
-              text += `\n失敗前已入庫 ${result.copied.length} 個檔案`;
-            }
-          } else {
-            if (result.copied.length > 0) {
-              text += `已入庫 ${result.copied.length} 個檔案`;
-            }
-            if (result.skipped.length > 0) {
-              text += (text ? "\n" : "") + `跳過 ${result.skipped.length} 個檔案 (已存在):\n${result.skipped.join("\n")}`;
-            }
-            if (!text) {
-              text = "沒有檔案需要入庫。";
-            }
+          const files = await ensureStreamFiles(bot.api, ctx.pipeline, jobId, chatId);
+          if (!files) return;
+          const videoExts = new Set([".mp4", ".mkv", ".m4v", ".ts", ".avi", ".mov", ".webm"]);
+          const videos = files
+            .filter((f) => videoExts.has(path.extname(f.filename).toLowerCase()))
+            .sort((a, b) => a.filename.localeCompare(b.filename, undefined, { numeric: true }));
+          if (videos.length === 0) {
+            await sendMessage(bot.api, chatId, "沒有影片檔可入庫。");
+            return;
           }
-          await sendMessage(bot.api, chatId, text);
-        }, "library_copy");
+          const lines = ["#EXTM3U"];
+          for (const v of videos) {
+            lines.push(`#EXTINF:-1,${v.filename}`);
+            lines.push(generateStreamUrl(v.message_id, v.filename));
+          }
+          const title = getJobById(jobId)?.name || jobId;
+          try {
+            const result = await withRetry(() => uploadM3u8ToNetoro(lines.join("\n") + "\n", title), "netoro_upload");
+            await sendMessage(bot.api, chatId, `✅ 已入庫 Netoro: ${escapeHtml(result.title)} (${result.entry_count} 個項目)`);
+          } catch (err) {
+            logger.error(err, "Netoro upload failed");
+            await sendMessage(bot.api, chatId, `入庫失敗: ${escapeHtml(err instanceof Error ? err.message : String(err))}`);
+          }
+        }, "netoro_import");
 
       } else if (data.startsWith("cancel:")) {
         const hash = data.slice(7);
@@ -409,7 +372,7 @@ export function createBot(services: Services) {
           if (config.streamHost) {
             keyboard.text("Stream 直鏈", `st_yes:${jobId}`);
           }
-          if (config.paths.library) {
+          if (isNetoroEnabled()) {
             keyboard.text("📂 入庫", `lib:${jobId}`);
           }
           keyboard.row().text("🗑️ 刪除原始檔", `del:${jobId}`);
@@ -503,6 +466,53 @@ async function uploadTelegramGroups(
   }
 
   return { uploaded, failedGroups };
+}
+
+async function ensureStreamFiles(api: Api, pipeline: Pipeline, jobId: string, chatId: number) {
+  let files = getStreamFiles(jobId);
+
+  // Upload to Telegram if not yet uploaded
+  if (files.length === 0) {
+    const pending = getPendingAction(jobId);
+    if (!pending) {
+      await sendMessage(api, chatId, "找不到待上傳的檔案記錄。");
+      return null;
+    }
+    const pendingFiles: string[] = JSON.parse(pending.files);
+    const existingFiles = pendingFiles.filter((f) => fs.existsSync(f));
+    if (existingFiles.length === 0) {
+      await sendMessage(api, chatId, "原始檔案已不存在。");
+      return null;
+    }
+
+    const telegramFiles = await pipeline.prepareFilesForTelegramUpload(existingFiles);
+    if (telegramFiles.files.length === 0) {
+      await sendMessage(api, chatId, "沒有可上傳的檔案。");
+      return null;
+    }
+
+    const uploadChatId = config.uploadChatId || chatId;
+    const progressMessage = await sendMessage(api, chatId, `開始上傳 ${telegramFiles.files.length} 個檔案到 Telegram...`);
+
+    let failedGroups = 0;
+    try {
+      ({ failedGroups } = await uploadTelegramGroups(
+        api, jobId, chatId, uploadChatId, progressMessage.message_id, telegramFiles,
+      ));
+    } finally {
+      pipeline.retainTelegramUploadFiles(telegramFiles.temporaryFiles);
+    }
+
+    if (failedGroups > 0) {
+      await sendMessage(api, chatId, `⚠️ ${failedGroups} 組檔案上傳失敗，未提供不完整的分卷連結。可到 /status 選擇「重傳」。`);
+    }
+    files = getStreamFiles(jobId);
+    if (files.length === 0) {
+      await sendMessage(api, chatId, "所有檔案上傳失敗，請查看 log。");
+      return null;
+    }
+  }
+  return files;
 }
 
 function runInBackground(fn: () => Promise<void>, label: string) {

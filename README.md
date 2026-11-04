@@ -7,7 +7,7 @@ Telegram Bot 串接 qBittorrent，自動下載種子並上傳到 Telegram + Clou
 - 傳送 `.torrent` 檔案、磁力鏈結或 URL 給 Bot，自動加入 qBittorrent 下載
 - 下載進度即時更新（每 15 秒編輯訊息 + 進度條）
 - 僅在選擇 Stream 直鏈時，超過上傳上限的影片用 ffmpeg 分片，其餘檔案建立 7z 分卷；下載全部分卷後開啟 `.7z.001` 解壓
-- R2 與 MoviePilot 入庫不做 2GB 分割
+- R2 不做 2GB 分割
 - 上傳到指定群組，原訊息顯示檔案超連結清單
 - 可選上傳到 Cloudflare R2（24hr presigned URL）
 - 可選上傳到 Filebin（免費空間）
@@ -19,8 +19,8 @@ Telegram Bot 串接 qBittorrent，自動下載種子並上傳到 Telegram + Clou
 - `/disk` 查看磁碟剩餘空間
 - 每日自動更新 tracker 列表
 - 檔案 / qB 任務預設閒置超過 3 天自動清理
-- MoviePilot 入庫空間不足時改採逐檔搬入，待上一個檔案被取走後再繼續
-- 可選 WireGuard VPN（僅 qB 流量走 VPN tunnel）
+- 入庫：將 Stream 直鏈 m3u8 上傳到 Netoro（需設定 `NETORO_URL`、`NETORO_TOKEN` 與 `STREAM_HOST`）
+- 可選 WireGuard 或 IKEv2/IPsec VPN（僅 qB 流量走 VPN tunnel）
 
 ## 架構
 
@@ -109,6 +109,29 @@ cp data/wireguard/wg0.conf.example data/wireguard/wg0.conf
 docker compose -f docker-compose.yml -f docker-compose.vpn.yml up -d
 ```
 
+### IKEv2/IPsec（帳號密碼）
+
+若 VPN 供應商提供 IKEv2 與 EAP-MSCHAPv2 帳號密碼，可改用獨立的 IKEv2 overlay；不要同時載入 WireGuard overlay。和上方模式相同，只有 qBittorrent 共用 VPN 容器的網路，bot、Telegram API 和 stream 使用一般網路。qB WebUI 仍經 `qb-proxy` 開在主機的 8080 埠。
+
+在 `.env` 設定：
+
+```dotenv
+IKEV2_SERVER=203.0.113.10
+IKEV2_REMOTE_ID=vpn.example.com
+IKEV2_USERNAME=your-username
+IKEV2_PASSWORD=your-password
+```
+
+`IKEV2_SERVER` 必須是 VPN 伺服器的 IPv4 位址；`IKEV2_REMOTE_ID` 必須與伺服器憑證中的名稱一致。伺服器須提供有效且受信任的憑證；若使用私有 CA，將 CA 憑證放在 `data/ikev2/ca.crt`。不要關閉伺服器憑證驗證。DNS 可在 `ikev2/resolv.conf` 設定，qBittorrent 的 DNS 查詢會走 IPsec 隧道。
+若密碼含有 `$` 或 `#` 等特殊字元，請依 Docker Compose `.env` 語法用單引號包住值。
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.ikev2.yml up -d --build
+docker compose -f docker-compose.yml -f docker-compose.ikev2.yml ps
+```
+
+隧道連線成功後 qBittorrent 才會啟動；中斷時 VPN 容器的出站防火牆會封鎖 qBittorrent 的一般網路流量。IKEv2 模式不在主機公開 torrent 的 6891 埠；若需入站連線，請在 VPN 供應商設定轉送埠，並同步修改 qBittorrent 的監聽埠。
+
 ## 環境變數
 
 | 變數 | 說明 |
@@ -128,7 +151,8 @@ docker compose -f docker-compose.yml -f docker-compose.vpn.yml up -d
 | `R2_SECRET_ACCESS_KEY` | R2 Secret Key |
 | `R2_BUCKET_NAME` | R2 Bucket 名稱 |
 | `R2_PUBLIC_URL` | R2 公開 URL（選填） |
-| `LIBRARY_PATH` | MoviePilot 入庫監控目錄（選填） |
+| `NETORO_URL` | Netoro 網址（如 `https://netoro.treexhd.workers.dev`），設定後啟用「入庫」按鈕 |
+| `NETORO_TOKEN` | Netoro `UPLOAD_TOKEN` |
 | `STREAM_HOST` | Stream server 公開 URL（如 `http://ip:8082`） |
 | `STREAM_SECRET` | Stream URL 簽名密鑰（bot 與 stream 共用） |
 | `STREAM_API_KEY` | Stream API key（選填） |

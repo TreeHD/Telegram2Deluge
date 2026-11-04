@@ -9,6 +9,7 @@ import { isVideoFile } from "./utils.js";
 import { QBClient } from "../qb/client.js";
 import { withRetry } from "../utils/retry.js";
 import { escapeHtml, escapeHref } from "../utils/html.js";
+import { isNetoroEnabled } from "../netoro/index.js";
 import { generateM3u8 } from "../utils/m3u8.js";
 import {
   addPipelineJob,
@@ -106,7 +107,7 @@ export class Pipeline {
       if (config.streamHost) {
         keyboard.text("Stream 直鏈", `st_yes:${job.id}`);
       }
-      if (config.paths.library) {
+      if (isNetoroEnabled()) {
         keyboard.text("📂 入庫", `lib:${job.id}`);
       }
       keyboard.row().text("🗑️ 刪除原始檔", `del:${job.id}`);
@@ -222,7 +223,7 @@ export class Pipeline {
 
   /**
    * Telegram's local Bot API accepts files up to 2 GB.  Keep pending-action
-   * files intact for R2 and library imports, and create split copies only
+   * files intact for R2 and Netoro imports, and create split copies only
    * immediately before a Telegram upload.
    */
   async prepareFilesForTelegramUpload(files: string[]): Promise<TelegramUploadFiles> {
@@ -365,7 +366,7 @@ export class Pipeline {
       const ext = path.extname(filePath).toLowerCase();
       if (muxResults.length > 0 && (ext === ".ass" || ext === ".srt" || ext === ".ssa")) continue;
 
-      // Do not split here. Pending files are used by R2 and library imports,
+      // Do not split here. Pending files are used by R2 and Netoro imports,
       // both of which must receive the original file.
       outputFiles.push(filePath);
     }

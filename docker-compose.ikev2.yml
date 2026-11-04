@@ -1,0 +1,87 @@
+# Optional IKEv2/IPsec EAP-MSCHAPv2 client; routes only qBittorrent through VPN.
+# Usage: docker compose -f docker-compose.yml -f docker-compose.ikev2.yml up -d --build
+services:
+  ikev2:
+    build: ./ikev2
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=1
+    environment:
+      IKEV2_SERVER: ${IKEV2_SERVER:?Set the VPN server IPv4 address}
+      IKEV2_REMOTE_ID: ${IKEV2_REMOTE_ID:?Set the VPN server certificate identity}
+      IKEV2_USERNAME: ${IKEV2_USERNAME:?Set the IKEv2 username}
+      IKEV2_PASSWORD: ${IKEV2_PASSWORD:?Set the IKEv2 password}
+    volumes:
+      - ./data/ikev2:/etc/ikev2:ro
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "swanctl --list-sas 2>/dev/null | grep -q INSTALLED"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  qbittorrent:
+    network_mode: "service:ikev2"
+    depends_on:
+      ikev2:
+        condition: service_healthy
+    ports: !reset []
+    volumes:
+      - ./ikev2/resolv.conf:/etc/resolv.conf:ro
+
+  qb-proxy:
+    image: alpine/socat:latest
+    restart: unless-stopped
+    command: TCP-LISTEN:8080,fork,reuseaddr TCP:ikev2:8080
+    ports:
+      - "8080:8080"
+    networks:
+      - internal
+    depends_on:
+      ikev2:
+        condition: service_healthy
+
+  stream-proxy:
+    image: alpine/socat:latest
+    restart: unless-stopped
+    command: TCP-LISTEN:8082,fork,reuseaddr TCP:stream:8082
+    ports:
+      - "8082:8082"
+    networks:
+      - internal
+    depends_on:
+      - stream
+
+  telegram-bot-api:
+    network_mode: !reset ""
+    depends_on:
+      - qbittorrent
+    networks:
+      - internal
+    ports:
+      - "8081:8081"
+
+  bot:
+    network_mode: !reset ""
+    depends_on:
+      - qbittorrent
+      - telegram-bot-api
+    networks:
+      - internal
+    environment:
+      - QB_HOST=ikev2
+      - TELEGRAM_API_ROOT=http://telegram-bot-api:8081
+
+  stream:
+    network_mode: !reset ""
+    depends_on:
+      - ikev2
+    networks:
+      - internal
+
+networks:
+  internal:
+    driver: bridge

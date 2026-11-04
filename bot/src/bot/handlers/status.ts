@@ -1,6 +1,7 @@
 import { InlineKeyboard } from "grammy";
 import { BotContext } from "../index.js";
 import { config, logger } from "../../config.js";
+import { isNetoroEnabled } from "../../netoro/index.js";
 import { getAllPendingActions, getAllActiveJobs, getJobById, getFailedJobs, getStreamFiles, getPendingAction } from "../../db/index.js";
 import { escapeHtml } from "../../utils/html.js";
 import { withRetry } from "../../utils/retry.js";
@@ -220,7 +221,7 @@ async function buildDetail(ctx: BotContext, type: string, id: string): Promise<D
     if (config.streamHost) {
       keyboard.text("Stream", `st_yes:${id}`);
     }
-    if (config.paths.library) {
+    if (isNetoroEnabled()) {
       keyboard.text("📂 入庫", `lib:${id}`);
     }
     keyboard.row();

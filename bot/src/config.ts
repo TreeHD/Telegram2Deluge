@@ -44,7 +44,6 @@ export const config = {
     downloads: optional("DOWNLOAD_DIR", "/downloads"),
     processing: optional("PROCESSING_DIR", "/processing"),
     queue: optional("QUEUE_DIR", "/data/queue"),
-    library: process.env.LIBRARY_PATH || "",
   },
 
   cleanup: {
@@ -58,6 +57,11 @@ export const config = {
 
   ffmpeg: {
     preset: optional("FFMPEG_PRESET", "medium"),
+  },
+
+  netoro: {
+    url: optional("NETORO_URL", ""),
+    token: optional("NETORO_TOKEN", ""),
   },
 
   streamHost: optional("STREAM_HOST", ""),
